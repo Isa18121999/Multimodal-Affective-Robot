@@ -11,6 +11,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import create_access_token, get_current_user, hash_password, verify_password
+from app.config import settings, validate_deployment_settings
 from app.database import async_session, get_db, init_db
 from app.models import (
     Interaccion,
@@ -32,12 +33,19 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 async def on_startup():
+    validate_deployment_settings()
     await init_db()
     async with async_session() as db:
         result = await db.execute(select(Usuario).where(Usuario.username == "admin"))
         if result.scalar_one_or_none() is None:
-            db.add(Usuario(username="admin", password_hash=hash_password("admin123"), rol="admin"))
+            password = settings.INITIAL_ADMIN_PASSWORD or "admin123"
+            db.add(Usuario(username="admin", password_hash=hash_password(password), rol="admin"))
             await db.commit()
+
+
+@app.get("/health", include_in_schema=False)
+async def healthcheck():
+    return {"status": "ok"}
 
 
 class RegisterRequest(BaseModel):
