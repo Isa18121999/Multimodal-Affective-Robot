@@ -44,11 +44,13 @@ class ChuwiEmotionalManager:
 
     def analyze_interaction(self, message, modalities=None):
         """Analiza texto y fusiona señales opcionales de voz y rostro."""
+        message = message or ""
         text_emotion = self.adapter.detect_emotion(message)
+        text_confidence = 0.0 if not message.strip() else 0.6
         signals = {
             "text": {
                 "emotion": self.normalize_emotion(text_emotion),
-                "confidence": 1.0,
+                "confidence": text_confidence,
             }
         }
 
