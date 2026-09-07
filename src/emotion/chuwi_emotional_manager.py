@@ -4,10 +4,31 @@ from src.emotion.multimodal_emotion_fusion import MultimodalEmotionFusion
 
 
 class ChuwiEmotionalManager:
-    """Coordina deteccion emocional, fusion multimodal y estrategias."""
+    """Coordina detección emocional, fusión multimodal y estrategias."""
 
     EMOTION_DB_MAP = {
         "ANXIOUS": "anxiety",
+    }
+
+    EXTERNAL_EMOTION_MAP = {
+        "feliz": "HAPPY",
+        "happy": "HAPPY",
+        "alegre": "HAPPY",
+        "triste": "SAD",
+        "sad": "SAD",
+        "enojado": "FRUSTRATED",
+        "angry": "FRUSTRATED",
+        "molesto": "FRUSTRATED",
+        "asustado": "FEAR",
+        "fear": "FEAR",
+        "miedo": "FEAR",
+        "nervioso": "ANXIOUS",
+        "ansioso": "ANXIOUS",
+        "anxious": "ANXIOUS",
+        "neutral": "CALM",
+        "calm": "CALM",
+        "sorprendido": "CALM",
+        "surprised": "CALM",
     }
 
     def __init__(self, fusion=None):
@@ -15,20 +36,29 @@ class ChuwiEmotionalManager:
         self.database = EmotionDatabase()
         self.fusion = fusion or MultimodalEmotionFusion()
 
-    def analyze_interaction(self, message, modalities=None):
-        """Analiza texto y, opcionalmente, señales de voz y rostro.
+    @classmethod
+    def normalize_emotion(cls, emotion):
+        """Normaliza etiquetas externas a los estados internos de Chuwi."""
+        normalized = str(emotion or "CALM").strip().casefold()
+        return cls.EXTERNAL_EMOTION_MAP.get(normalized, normalized.upper())
 
-        Si no se proporcionan modalidades adicionales, mantiene el flujo
-        actual basado en texto para conservar compatibilidad.
-        """
+    def analyze_interaction(self, message, modalities=None):
+        """Analiza texto y fusiona señales opcionales de voz y rostro."""
         text_emotion = self.adapter.detect_emotion(message)
         signals = {
             "text": {
-                "emotion": text_emotion,
+                "emotion": self.normalize_emotion(text_emotion),
                 "confidence": 1.0,
             }
         }
-        signals.update(modalities or {})
+
+        for modality, signal in (modalities or {}).items():
+            if not signal:
+                continue
+            signals[modality] = {
+                **signal,
+                "emotion": self.normalize_emotion(signal.get("emotion")),
+            }
 
         fused = self.fusion.fuse(signals)
         emotion = fused["emotion"]
