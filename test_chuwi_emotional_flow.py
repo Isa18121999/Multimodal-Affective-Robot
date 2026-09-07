@@ -23,6 +23,7 @@ def run_tests():
         ("Estoy muy nervioso por estar en el hospital", "ANXIOUS", "respiración y conversación tranquila"),
         ("Estoy molesto porque no puedo hacerlo", "FRUSTRATED", "motivación y distracción"),
         ("Estoy feliz, todo está genial", "HAPPY", "refuerzo emocional"),
+        ("Estoy tranquilo y todo está bien", "CALM", "conversación general"),
     ]
 
     for message, expected_emotion, expected_strategy in cases:
@@ -39,10 +40,18 @@ def run_tests():
     assert multimodal["scores"]["SAD"] > multimodal["scores"]["CALM"]
     print("OK - Fusión texto + rostro")
 
+    face_only = emotional.analyze_interaction(
+        "",
+        modalities={"face": {"emotion": "miedo", "confidence": 1.0}},
+    )
+    assert face_only["emotion"] == "FEAR"
+    assert face_only["confidence"] > 0
+    print("OK - Rostro sin señal textual")
+
     fusion = MultimodalEmotionFusion()
     conflict = fusion.fuse({
-        "text": {"emotion": "HAPPY", "confidence": 0.6},
-        "face": {"emotion": "FEAR", "confidence": 1.0},
+        "text": {"emotion": "HAPPY", "confidence": 1.0},
+        "face": {"emotion": "FEAR", "confidence": 0.9},
     })
     assert conflict["emotion"] == "HAPPY"
     print("OK - Fusión ponderada ante señales en conflicto")
@@ -52,6 +61,7 @@ def run_tests():
     assert plan_for_emotion("ANXIOUS").key == "respiracion"
     assert plan_for_emotion("FRUSTRATED").key == "anclaje"
     assert plan_for_emotion("HAPPY").key == "acompañamiento"
+    assert plan_for_emotion("CALM").key == "acompañamiento"
     print("OK - Mapeo de emociones internas a protocolos")
 
     response, strategy = ai.generate_response("Tengo miedo de mi operación", user)
