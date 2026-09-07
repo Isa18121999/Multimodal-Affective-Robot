@@ -2,6 +2,7 @@ from src.memory.memory_manager import ChuwiMemory
 from src.emotion.chuwi_emotional_manager import ChuwiEmotionalManager
 from src.emotion.multimodal_emotion_fusion import MultimodalEmotionFusion
 from src.core.chuwi_ai_engine import ChuwiAIEngine
+from src.integration.voice_emotion_analyzer import VoiceEmotionAnalyzer
 from app.support_protocol import plan_for_emotion
 
 
@@ -40,13 +41,19 @@ def run_tests():
     assert multimodal["scores"]["SAD"] > multimodal["scores"]["CALM"]
     print("OK - Fusión texto + rostro")
 
-    face_only = emotional.analyze_interaction(
-        "",
-        modalities={"face": {"emotion": "miedo", "confidence": 1.0}},
+    face_over_name = emotional.analyze_interaction(
+        "Paciente",
+        modalities={"face": {"emotion": "fear", "confidence": 1.0}},
     )
-    assert face_only["emotion"] == "FEAR"
-    assert face_only["confidence"] > 0
-    print("OK - Rostro sin señal textual")
+    assert face_over_name["emotion"] == "FEAR"
+    print("OK - El nombre no sobreescribe la emoción facial")
+
+    empty_with_face = emotional.analyze_interaction(
+        "",
+        modalities={"face": {"emotion": "fear", "confidence": 1.0}},
+    )
+    assert empty_with_face["emotion"] == "FEAR"
+    print("OK - Rostro disponible aunque no haya texto")
 
     fusion = MultimodalEmotionFusion()
     conflict = fusion.fuse({
@@ -56,6 +63,13 @@ def run_tests():
     assert conflict["emotion"] == "HAPPY"
     assert conflict["scores"]["HAPPY"] > conflict["scores"]["FEAR"]
     print("OK - Fusión ponderada ante señales en conflicto")
+
+    voice = VoiceEmotionAnalyzer()
+    voice_signal = voice.analyze(None)
+    assert voice_signal["source"] == "voice"
+    assert voice_signal["confidence"] == 0.0
+    assert voice_signal["available"] is False
+    print("OK - Punto de integración de emoción por voz sin inferencia no validada")
 
     assert plan_for_emotion("FEAR").key == "respiracion"
     assert plan_for_emotion("SAD").key == "visualizacion"
