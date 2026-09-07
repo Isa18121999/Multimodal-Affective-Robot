@@ -65,7 +65,7 @@ def plan_for_emotion(emotion: str, allowed: list[str] | None = None) -> SupportP
     normalized = emotion.casefold()
     if any(word in normalized for word in ("miedo", "ansiedad", "ansioso", "nervioso", "asustado", "preocup")):
         plan = PLANS["ansiedad"]
-    elif any(word in normalized for word in ("triste", "llanto", "deprim", "pena")):
+    elif any(word in normalized for word in ("triste", "llanto", "deprim", "pena", "extrañ", "extran")):
         plan = PLANS["tristeza"]
     elif any(word in normalized for word in ("enojo", "enfad", "rabia", "molesto", "furia")):
         plan = PLANS["enojo"]
