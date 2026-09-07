@@ -46,6 +46,12 @@ if (['doctor', 'admin'].includes(getRole())) {
     }
     let allSessions = [];
 
+    function escapeHtml(value) {
+        const node = document.createElement('div');
+        node.textContent = String(value ?? '');
+        return node.innerHTML;
+    }
+
     async function loadSessions() {
         const res = await apiFetch('/api/sessions?limit=50');
         if (!res.ok) return;
@@ -59,7 +65,7 @@ if (['doctor', 'admin'].includes(getRole())) {
                  id="session-${s.id}">
                 <div style="display:flex;justify-content:space-between;">
                     <strong>Sesion #${s.id}</strong>
-                    ${s.emocion_inicial ? `<span class="badge badge-info">${s.emocion_inicial}</span>` : ''}
+                    ${s.emocion_inicial ? `<span class="badge badge-info">${escapeHtml(s.emocion_inicial)}</span>` : ''}
                 </div>
                 <div style="font-size:0.8rem;color:var(--text-muted);">${new Date(s.inicio).toLocaleString()}</div>
             </div>
@@ -78,7 +84,7 @@ if (['doctor', 'admin'].includes(getRole())) {
         const session = allSessions.find(s => s.id === sessionId);
 
         document.getElementById('session-info').innerHTML = session
-            ? `Sesion #${session.id} | Inicio: ${new Date(session.inicio).toLocaleString()} | Emocion: ${session.emocion_inicial || '-'}`
+            ? `Sesion #${session.id} | Inicio: ${new Date(session.inicio).toLocaleString()} | Emocion: ${escapeHtml(session.emocion_inicial || '-')}`
             : '';
 
         const chat = document.getElementById('chat-view');
@@ -91,9 +97,9 @@ if (['doctor', 'admin'].includes(getRole())) {
             <div class="chat-bubble ${i.rol === 'usuario' ? 'chat-user' : 'chat-robot'}">
                 <div style="font-size:0.7rem;color:rgba(255,255,255,0.6);margin-bottom:2px;">
                     ${i.rol === 'usuario' ? 'Paciente' : 'Chuwibot'}
-                    ${i.emocion ? ` | ${i.emocion}` : ''}
+                    ${i.emocion ? ` | ${escapeHtml(i.emocion)}` : ''}
                 </div>
-                ${i.texto}
+                ${escapeHtml(i.texto)}
                 <div style="font-size:0.65rem;color:rgba(255,255,255,0.4);margin-top:4px;">
                     ${new Date(i.timestamp).toLocaleTimeString()}
                 </div>

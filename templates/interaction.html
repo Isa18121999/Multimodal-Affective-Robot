@@ -134,8 +134,10 @@
     };
 
     function connectWS() {
+        const token = getToken();
+        if (!token) return;
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(`${proto}://${location.host}/ws/robot`);
+        ws = new WebSocket(`${proto}://${location.host}/ws/robot?token=${encodeURIComponent(token)}`);
 
         ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
@@ -176,7 +178,7 @@
         ws.onopen = () => {
             try { ws.send('interaction'); } catch (_) {}
         };
-        ws.onclose = () => setTimeout(connectWS, 3000);
+        ws.onclose = () => { if (getToken()) setTimeout(connectWS, 3000); };
     }
 
     function updateState(state) {

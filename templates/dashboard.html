@@ -74,9 +74,17 @@
 
     let ws;
 
+    function escapeHtml(value) {
+        const node = document.createElement('div');
+        node.textContent = String(value ?? '');
+        return node.innerHTML;
+    }
+
     function connectWS() {
+        const token = getToken();
+        if (!token) return;
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(`${proto}://${location.host}/ws/robot`);
+        ws = new WebSocket(`${proto}://${location.host}/ws/robot?token=${encodeURIComponent(token)}`);
 
         ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
@@ -92,7 +100,7 @@
             if (msg.event === 'robot_speak') addLog(`🔊 ${msg.data.text}`);
             if (msg.event === 'notificacion') { showToast(`🔔 ${msg.data.mensaje}`); loadNotifications(); loadStats(); }
         };
-        ws.onclose = () => setTimeout(connectWS, 3000);
+        ws.onclose = () => { if (getToken()) setTimeout(connectWS, 3000); };
     }
     connectWS();
 
@@ -113,7 +121,9 @@
     function addLog(text) {
         const log = document.getElementById('robot-log');
         const time = new Date().toLocaleTimeString();
-        log.innerHTML += `<div>[${time}] ${text}</div>`;
+        const entry = document.createElement('div');
+        entry.textContent = `[${time}] ${text}`;
+        log.appendChild(entry);
         log.scrollTop = log.scrollHeight;
     }
 
@@ -135,7 +145,7 @@
             const max = Math.max(...Object.values(d.emotions));
             chart.innerHTML = Object.entries(d.emotions).map(([emo, count]) => `
                 <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;">
-                    <span style="min-width:80px;font-size:.85rem;">${emo}</span>
+                    <span style="min-width:80px;font-size:.85rem;">${escapeHtml(emo)}</span>
                     <div style="flex:1;background:var(--bg-input);border-radius:4px;height:24px;">
                         <div style="width:${(count/max)*100}%;background:var(--primary);height:100%;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-size:.75rem;">${count}</div>
                     </div>
@@ -148,9 +158,9 @@
         if (!res.ok) return;
         const sessions = await res.json();
         document.getElementById('sessions-table').innerHTML = sessions.map(s => `
-            <tr><td>#${s.id}</td><td>${s.paciente}</td><td>${new Date(s.inicio).toLocaleString()}</td>
+            <tr><td>#${s.id}</td><td>${escapeHtml(s.paciente)}</td><td>${new Date(s.inicio).toLocaleString()}</td>
             <td>${s.fin ? new Date(s.fin).toLocaleString() : '<span class="badge badge-warning">Activa</span>'}</td>
-            <td>${s.emocion_inicial || '-'}</td><td><a href="/history?session=${s.id}" style="color:var(--primary);">Ver</a></td></tr>`).join('');
+            <td>${escapeHtml(s.emocion_inicial || '-')}</td><td><a href="/history?session=${s.id}" style="color:var(--primary);">Ver</a></td></tr>`).join('');
     }
 
     async function loadNotifications() {
@@ -159,7 +169,7 @@
         const notifs = await res.json();
         const panel = document.getElementById('notif-panel');
         panel.innerHTML = notifs.length === 0 ? '<div class="notif-item" style="color:var(--text-muted);">Sin notificaciones</div>' :
-            notifs.map(n => `<div class="notif-item ${n.leida ? '' : 'unread'}" onclick="markRead(${n.id}, this)"><div>${n.mensaje}</div><div class="notif-time">${new Date(n.timestamp).toLocaleString()}</div></div>`).join('');
+            notifs.map(n => `<div class="notif-item ${n.leida ? '' : 'unread'}" onclick="markRead(${n.id}, this)"><div>${escapeHtml(n.mensaje)}</div><div class="notif-time">${new Date(n.timestamp).toLocaleString()}</div></div>`).join('');
     }
 
     function toggleNotifPanel() { document.getElementById('notif-panel').classList.toggle('open'); }

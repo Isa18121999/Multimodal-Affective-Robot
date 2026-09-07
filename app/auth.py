@@ -36,6 +36,11 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Usuario:
+    return await get_user_from_token(token, db)
+
+
+async def get_user_from_token(token: str, db: AsyncSession) -> Usuario:
+    """Resolve a JWT to a user for both HTTP and WebSocket endpoints."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Token inválido",
