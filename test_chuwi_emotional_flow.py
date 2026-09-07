@@ -39,6 +39,14 @@ def run_tests():
     assert multimodal["scores"]["SAD"] > multimodal["scores"]["CALM"]
     print("OK - Fusión texto + rostro")
 
+    fusion = MultimodalEmotionFusion()
+    conflict = fusion.fuse({
+        "text": {"emotion": "HAPPY", "confidence": 0.6},
+        "face": {"emotion": "FEAR", "confidence": 1.0},
+    })
+    assert conflict["emotion"] == "HAPPY"
+    print("OK - Fusión ponderada ante señales en conflicto")
+
     assert plan_for_emotion("FEAR").key == "respiracion"
     assert plan_for_emotion("SAD").key == "visualizacion"
     assert plan_for_emotion("ANXIOUS").key == "respiracion"
