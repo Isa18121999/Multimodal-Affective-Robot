@@ -25,6 +25,7 @@ from app.support_protocol import (
     plan_for_emotion,
 )
 from app.websocket_manager import ws_manager
+from src.emotion.chuwi_emotional_manager import ChuwiEmotionalManager
 
 
 class RobotState(str, Enum):
@@ -36,7 +37,7 @@ class RobotState(str, Enum):
 class RobotController:
     GREETING = "Hola, me llamo Chuwi. ¿Cómo te llamas?"
 
-    def __init__(self):
+    def __init__(self, emotional_manager=None):
         self.state = RobotState.STOPPED
         self.current_session_id: int | None = None
         self.historial: list[str] = []
@@ -49,8 +50,10 @@ class RobotController:
         self.active_patient_code: str | None = None
         self.distance_cm: float | None = None
         self.current_emotion: str | None = None
+        self.current_face_signal: dict | None = None
         self.last_speech: str | None = None
         self.listening = False
+        self.emotional_manager = emotional_manager or ChuwiEmotionalManager()
 
     def set_active_profile(self, profile: dict | None):
         self.active_profile = profile
@@ -82,6 +85,7 @@ class RobotController:
         self.current_session_id = None
         self.current_child_name = None
         self.current_emotion = None
+        self.current_face_signal = None
         self.last_speech = None
         self.listening = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
@@ -112,7 +116,8 @@ class RobotController:
         if ret:
             cv2.imwrite(path, frame)
 
-    async def _detect_emotion(self, image_path: str) -> str:
+    async def _detect_emotion(self, image_path: str) -> dict:
+        """Obtiene la señal facial y la normaliza al vocabulario de Chuwi."""
         try:
             with open(image_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
@@ -124,7 +129,13 @@ class RobotController:
             payload = {
                 "contents": [{
                     "parts": [
-                        {"text": "Analiza únicamente la expresión facial visible. Responde con una sola palabra en español de esta lista: feliz, triste, enojado, asustado, sorprendido, neutral."},
+                        {
+                            "text": (
+                                "Analiza únicamente la expresión facial visible. "
+                                "Responde con una sola palabra en español de esta lista: "
+                                "feliz, triste, enojado, asustado, sorprendido, neutral."
+                            )
+                        },
                         {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
                     ]
                 }]
@@ -133,14 +144,28 @@ class RobotController:
                 response = await client.post(url, json=payload, timeout=20)
                 response.raise_for_status()
                 data = response.json()
-            emotion = data["candidates"][0]["content"]["parts"][0]["text"].strip().lower()
-            valid = {"feliz", "triste", "enojado", "asustado", "sorprendido", "neutral"}
-            return emotion if emotion in valid else "neutral"
+            raw_emotion = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            emotion = self.emotional_manager.normalize_emotion(raw_emotion)
+            if emotion not in {"HAPPY", "SAD", "FRUSTRATED", "FEAR", "ANXIOUS", "CALM"}:
+                emotion = "CALM"
+            return {"emotion": emotion, "confidence": 0.75, "source": "face"}
         except Exception as exc:
             print(f"Emotion error: {exc}")
-            return "neutral"
+            return {"emotion": "CALM", "confidence": 0.0, "source": "face"}
 
-    async def _generate_response(self, emotion: str, text: str | None = None) -> str:
+    def _build_modalities(self) -> dict:
+        if not self.current_face_signal:
+            return {}
+        return {"face": self.current_face_signal}
+
+    def _analyze_emotion(self, text: str) -> dict:
+        """Único punto de entrada del controlador al motor emocional multimodal."""
+        return self.emotional_manager.analyze_interaction(
+            text,
+            modalities=self._build_modalities(),
+        )
+
+    async def _generate_response(self, emotional_result: dict, text: str | None = None) -> str:
         if text:
             self.historial.append(f"Usuario: {text}")
         context = "\n".join(self.historial[-6:])
@@ -152,12 +177,15 @@ class RobotController:
                 f"Usa lenguaje apropiado para {self.active_profile.get('rango_edad', '6-12')} años. "
                 f"Intereses: {interests or 'ninguno'}. Temas a evitar: {topics or 'ninguno'}.\n"
             )
+        emotion = emotional_result["emotion"]
+        strategy = emotional_result.get("strategy") or "acompañamiento"
         prompt = (
             "Eres Chuwi, un robot social de apoyo emocional para niños hospitalizados.\n"
             "Responde de forma corta, cálida, amigable, natural y apropiada para un niño.\n"
             "No diagnostiques, no prometas curas, no des terapia clínica ni sugieras medicamentos.\n"
             f"{profile_note}"
-            f"Contexto:\n{context}\n\nEmoción observada: {emotion}"
+            f"Emoción multimodal detectada: {emotion}. Estrategia: {strategy}.\n"
+            f"Contexto:\n{context}"
         )
         try:
             client = Groq(api_key=settings.GROQ_API_KEY)
@@ -171,7 +199,14 @@ class RobotController:
             text_response = response.choices[0].message.content.strip()
         except Exception as exc:
             print(f"Groq error: {exc}")
-            text_response = "Estoy aquí contigo. ¿Quieres contarme cómo te sientes?"
+            fallback = {
+                "FEAR": "Estoy contigo. Podemos ir paso a paso.",
+                "SAD": "Estoy aquí para escucharte. ¿Quieres contarme cómo te sientes?",
+                "ANXIOUS": "Podemos respirar juntos y conversar tranquilamente.",
+                "FRUSTRATED": "Entiendo que algo puede haberte molestado. Podemos ir paso a paso.",
+                "HAPPY": "¡Qué bueno! Me alegra compartir este momento contigo.",
+            }
+            text_response = fallback.get(emotion, "Te estoy escuchando y quiero acompañarte.")
         self.historial.append(f"Chuwi: {text_response}")
         return text_response
 
@@ -188,10 +223,7 @@ class RobotController:
             {"text": text, "sesion_id": self.current_session_id},
         )
         try:
-            communicate = edge_tts.Communicate(
-                text=f"{text}...",
-                voice="es-MX-DaliaNeural",
-            )
+            communicate = edge_tts.Communicate(text=f"{text}...", voice="es-MX-DaliaNeural")
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as file:
                 path = file.name
             try:
@@ -254,13 +286,7 @@ class RobotController:
             return words[0].capitalize()
         return None
 
-    async def _save_interaction(
-        self,
-        db: AsyncSession,
-        rol: str,
-        texto: str,
-        emocion: str | None = None,
-    ):
+    async def _save_interaction(self, db: AsyncSession, rol: str, texto: str, emocion: str | None = None):
         if rol == "usuario":
             texto = re.sub(
                 r"\b(me llamo|mi nombre es)\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,30}\b",
@@ -307,6 +333,7 @@ class RobotController:
         self.state = RobotState.INTERACTING
         self.current_child_name = None
         self.current_emotion = None
+        self.current_face_signal = None
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
 
         async with async_session() as db:
@@ -317,12 +344,7 @@ class RobotController:
             self.current_session_id = session.id
 
             if self.active_patient_id:
-                db.add(
-                    SesionPaciente(
-                        session_id=session.id,
-                        paciente_id=self.active_patient_id,
-                    )
-                )
+                db.add(SesionPaciente(session_id=session.id, paciente_id=self.active_patient_id))
                 await db.commit()
 
             await crear_notificacion(
@@ -346,46 +368,43 @@ class RobotController:
                 if self.current_child_name
                 else "Mucho gusto. Voy a acompañarte un momento."
             )
-            await self._save_interaction(
-                db,
-                "robot",
-                "Inicio de acompañamiento después de preguntar el nombre",
-            )
+            await self._save_interaction(db, "robot", "Inicio de acompañamiento después de preguntar el nombre")
             await self._speak(welcome, db)
 
             descriptor, photo_path = tempfile.mkstemp(suffix=".jpg")
             os.close(descriptor)
             try:
                 await asyncio.to_thread(self._take_photo, photo_path)
-                emotion = await self._detect_emotion(photo_path)
+                self.current_face_signal = await self._detect_emotion(photo_path)
             finally:
                 try:
                     os.remove(photo_path)
                 except FileNotFoundError:
                     pass
 
-            self.current_emotion = emotion
+            initial_result = self._analyze_emotion(name_reply or "",)
+            self.current_emotion = initial_result["emotion"]
             await ws_manager.broadcast(
                 "robot_emotion",
-                {"emotion": emotion, "sesion_id": session.id},
+                {
+                    "emotion": self.current_emotion,
+                    "confidence": initial_result["confidence"],
+                    "scores": initial_result["scores"],
+                    "sesion_id": session.id,
+                },
             )
-            session.emocion_inicial = emotion
+            session.emocion_inicial = self.current_emotion
             await db.commit()
 
-            allowed = (
-                self.active_profile.get("tecnicas_autorizadas")
-                if self.active_profile
-                else None
-            )
-            support = plan_for_emotion(emotion, allowed)
+            allowed = self.active_profile.get("tecnicas_autorizadas") if self.active_profile else None
+            support = plan_for_emotion(self.current_emotion, allowed)
             support_message = personalize_message(support, self.active_profile)
             spoken_support = (
                 f"{self.current_child_name}, {support_message}"
-                if self.current_child_name
-                and not support_message.startswith(f"{self.current_child_name},")
+                if self.current_child_name and not support_message.startswith(f"{self.current_child_name},")
                 else support_message
             )
-            await self._save_interaction(db, "robot", support_message, emotion)
+            await self._save_interaction(db, "robot", support_message, self.current_emotion)
             await self._speak(spoken_support, db)
 
             retries = 0
@@ -420,12 +439,22 @@ class RobotController:
                     await self._speak(goodbye, db)
                     break
 
-                response = await self._generate_response("conversación", text)
-                await self._save_interaction(db, "robot", response)
+                emotional_result = self._analyze_emotion(text)
+                self.current_emotion = emotional_result["emotion"]
+                await ws_manager.broadcast(
+                    "robot_emotion",
+                    {
+                        "emotion": self.current_emotion,
+                        "confidence": emotional_result["confidence"],
+                        "scores": emotional_result["scores"],
+                        "sesion_id": session.id,
+                    },
+                )
+                response = await self._generate_response(emotional_result, text)
+                await self._save_interaction(db, "robot", response, self.current_emotion)
                 spoken_response = (
                     f"{self.current_child_name}, {response}"
-                    if self.current_child_name
-                    and not response.startswith(f"{self.current_child_name},")
+                    if self.current_child_name and not response.startswith(f"{self.current_child_name},")
                     else response
                 )
                 await self._speak(spoken_response, db)
@@ -436,10 +465,10 @@ class RobotController:
         self.current_session_id = None
         self.current_child_name = None
         self.current_emotion = None
+        self.current_face_signal = None
         self.listening = False
         self.state = RobotState.WAITING
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
-
         await asyncio.sleep(5)
 
 
