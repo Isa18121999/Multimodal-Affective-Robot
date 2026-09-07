@@ -7,6 +7,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,6 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.auth import create_access_token, get_current_user, get_user_from_token, hash_password, verify_password
 from app.config import settings, validate_deployment_settings
 from app.database import async_session, engine, get_db, init_db
+from app.auth import create_access_token, get_current_user, hash_password, verify_password
+from app.config import settings, validate_deployment_settings
+from app.database import async_session, get_db, init_db
 from app.models import (
     Interaccion,
     Notificacion,
