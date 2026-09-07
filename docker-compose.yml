@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16-alpine
@@ -7,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: chuwibot
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chuwibot_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
       POSTGRES_DB: chuwibot_db
     ports:
       - "5432:5432"
@@ -26,19 +24,25 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://chuwibot:${POSTGRES_PASSWORD:-chuwibot_secret}@db:5432/chuwibot_db
-      SECRET_KEY: ${SECRET_KEY:-cambiar-en-produccion-abc123}
+      DATABASE_URL: postgresql+asyncpg://chuwibot:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}@db:5432/chuwibot_db
+      SECRET_KEY: ${SECRET_KEY:?Define SECRET_KEY en .env}
+      ENVIRONMENT: production
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Define INITIAL_ADMIN_PASSWORD en .env}
       GROQ_API_KEY: ${GROQ_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
-    volumes:
-      - .:/app
     # devices:
     #   - /dev/video0:/dev/video0  # Descomentar cuando haya cámara conectada
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
 volumes:
   pgdata:

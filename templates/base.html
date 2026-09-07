@@ -219,37 +219,3 @@
     {% block scripts %}{% endblock %}
 </body>
 </html>
-    <script>
-        const TOKEN_KEY = 'chuwibot_token';
-
-        function getToken() { return localStorage.getItem(TOKEN_KEY); }
-        function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
-        function clearToken() { localStorage.removeItem(TOKEN_KEY); }
-
-        async function apiFetch(url, options = {}) {
-            const token = getToken();
-            const headers = { ...options.headers };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-            if (options.body && typeof options.body === 'object') {
-                headers['Content-Type'] = 'application/json';
-                options.body = JSON.stringify(options.body);
-            }
-            const res = await fetch(url, { ...options, headers });
-            if (res.status === 401) { clearToken(); window.location.href = '/'; }
-            return res;
-        }
-
-        function showToast(msg, duration = 4000) {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = 'toast';
-            toast.textContent = msg;
-            container.appendChild(toast);
-            setTimeout(() => toast.remove(), duration);
-        }
-
-        function logout() { clearToken(); window.location.href = '/'; }
-    </script>
-    {% block scripts %}{% endblock %}
-</body>
-</html>
