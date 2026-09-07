@@ -26,6 +26,7 @@ from app.support_protocol import (
 )
 from app.websocket_manager import ws_manager
 from src.emotion.chuwi_emotional_manager import ChuwiEmotionalManager
+from src.integration.voice_emotion_analyzer import VoiceEmotionAnalyzer
 
 
 class RobotState(str, Enum):
@@ -51,9 +52,11 @@ class RobotController:
         self.distance_cm: float | None = None
         self.current_emotion: str | None = None
         self.current_face_signal: dict | None = None
+        self.current_voice_signal: dict | None = None
         self.last_speech: str | None = None
         self.listening = False
         self.emotional_manager = emotional_manager or ChuwiEmotionalManager()
+        self.voice_emotion_analyzer = VoiceEmotionAnalyzer()
 
     def set_active_profile(self, profile: dict | None):
         self.active_profile = profile
@@ -86,6 +89,7 @@ class RobotController:
         self.current_child_name = None
         self.current_emotion = None
         self.current_face_signal = None
+        self.current_voice_signal = None
         self.last_speech = None
         self.listening = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
@@ -154,9 +158,12 @@ class RobotController:
             return {"emotion": "CALM", "confidence": 0.0, "source": "face"}
 
     def _build_modalities(self) -> dict:
-        if not self.current_face_signal:
-            return {}
-        return {"face": self.current_face_signal}
+        modalities = {}
+        if self.current_face_signal:
+            modalities["face"] = self.current_face_signal
+        if self.current_voice_signal:
+            modalities["voice"] = self.current_voice_signal
+        return modalities
 
     def _analyze_emotion(self, text: str) -> dict:
         """Único punto de entrada del controlador al motor emocional multimodal."""
@@ -243,6 +250,7 @@ class RobotController:
 
     async def _listen(self) -> str:
         self.listening = True
+        self.current_voice_signal = None
         await ws_manager.broadcast(
             "robot_listening",
             {"listening": True, "sesion_id": self.current_session_id},
@@ -254,12 +262,14 @@ class RobotController:
                 with sr.Microphone() as source:
                     recognizer.adjust_for_ambient_noise(source, duration=1)
                     audio = recognizer.listen(source, timeout=5, phrase_time_limit=6)
-                return recognizer.recognize_google(audio, language="es-PE")
+                return audio, recognizer.recognize_google(audio, language="es-PE")
             except Exception as exc:
                 print(f"Listen error: {exc}")
-                return ""
+                return None, ""
 
-        text = await asyncio.to_thread(listen_blocking)
+        audio, text = await asyncio.to_thread(listen_blocking)
+        if audio is not None:
+            self.current_voice_signal = self.voice_emotion_analyzer.analyze(audio)
         self.listening = False
         await ws_manager.broadcast(
             "robot_listening",
@@ -334,6 +344,7 @@ class RobotController:
         self.current_child_name = None
         self.current_emotion = None
         self.current_face_signal = None
+        self.current_voice_signal = None
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
 
         async with async_session() as db:
@@ -382,7 +393,7 @@ class RobotController:
                 except FileNotFoundError:
                     pass
 
-            initial_result = self._analyze_emotion(name_reply or "",)
+            initial_result = self._analyze_emotion(name_reply or "")
             self.current_emotion = initial_result["emotion"]
             await ws_manager.broadcast(
                 "robot_emotion",
@@ -466,6 +477,7 @@ class RobotController:
         self.current_child_name = None
         self.current_emotion = None
         self.current_face_signal = None
+        self.current_voice_signal = None
         self.listening = False
         self.state = RobotState.WAITING
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
