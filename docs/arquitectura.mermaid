@@ -1,36 +1,42 @@
 graph TD
-    subgraph "Loop Principal"
-        A[🔄 Loop Infinito] --> B{detectar_persona}
-        B -->|No| A
-        B -->|Sí| C[activar_robot]
+    subgraph "Percepción multimodal"
+        A[📷 Cámara] --> B[Detección de presencia y captura facial]
+        C[🎤 Micrófono] --> D[Reconocimiento de voz]
+        E[📡 Sensor de proximidad] --> F[Detección de interacción]
     end
 
-    subgraph "Flujo de Interacción"
-        C --> D[tomar_foto /tmp/foto.jpg]
-        D --> E[detectar_emocion - Gemini API]
-        E --> F[generar_respuesta - Groq/LLaMA]
-        F --> G[hablar - TTS]
-        G --> H{escuchar - Micrófono}
-        H -->|Texto recibido| I{¿Dijo 'chau'?}
-        I -->|No| F
-        I -->|Sí| J[Despedirse] --> A
-        H -->|Sin texto x3| K[Timeout] --> A
+    subgraph "Fusión emocional"
+        B --> G[Señal facial]
+        D --> H[Señal de voz / texto]
+        G --> I[MultimodalEmotionFusion]
+        H --> I
+        I --> J[Chuwi Emotional Manager]
     end
 
-    subgraph "APIs Externas"
-        E --- L[Google Gemini 2.5 Flash\nAnálisis de emoción facial]
-        F --- M[Groq - LLaMA 3.1 8B\nGeneración de respuesta]
-        G --- N[ElevenLabs TTS\nVoz principal]
-        G --- O[Edge TTS - es-MX-DaliaNeural\nVoz fallback]
+    subgraph "Cognición e interacción"
+        J --> K[Personalidad adaptativa]
+        K --> L[Chuwi AI Engine]
+        L --> M[Respuesta conversacional]
+        M --> N[TTS / Audio]
     end
 
-    subgraph "Hardware"
-        P[📷 Cámara USB - OpenCV] --> B
-        P --> D
-        Q[🎤 Micrófono - SpeechRecognition] --> H
-        R[🔊 Altavoz - aplay/mpg123] --> G
+    subgraph "Persistencia y supervisión"
+        J --> O[Sesión emocional]
+        M --> P[Registro de interacción]
+        P --> Q[(PostgreSQL)]
+        O --> Q
     end
 
-    subgraph "Memoria Conversacional"
-        S[historial - últimos 6 mensajes] --> F
+    subgraph "APIs externas"
+        B --- R[Google Gemini\nAnálisis facial]
+        L --- S[Groq / LLaMA\nGeneración conversacional]
+        N --- T[Edge TTS / TTS externo]
     end
+
+    subgraph "Hardware de salida"
+        N --> U[🔊 Altavoz]
+    end
+
+    U --> V[Chuwi - robot de peluche]
+
+    style V fill:#f5f5f5,stroke:#555
