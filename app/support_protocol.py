@@ -58,19 +58,35 @@ RISK_MESSAGE = (
 
 
 def is_risk_disclosure(text: str) -> bool:
-    return bool(RISK_PATTERN.search(text))
+    return bool(RISK_PATTERN.search(text or ""))
+
+
+EMOTION_TO_PLAN = {
+    "FEAR": "ansiedad",
+    "ANXIOUS": "ansiedad",
+    "SAD": "tristeza",
+    "FRUSTRATED": "enojo",
+    "HAPPY": "acompañamiento",
+    "CALM": "acompañamiento",
+}
 
 
 def plan_for_emotion(emotion: str, allowed: list[str] | None = None) -> SupportPlan:
-    normalized = emotion.casefold()
-    if any(word in normalized for word in ("miedo", "ansiedad", "ansioso", "nervioso", "asustado", "preocup")):
-        plan = PLANS["ansiedad"]
-    elif any(word in normalized for word in ("triste", "llanto", "deprim", "pena", "extrañ", "extran")):
-        plan = PLANS["tristeza"]
-    elif any(word in normalized for word in ("enojo", "enfad", "rabia", "molesto", "furia")):
-        plan = PLANS["enojo"]
-    else:
-        plan = CALM_CHECK_IN
+    """Convierte etiquetas internas y externas en un plan seguro de apoyo."""
+    normalized = str(emotion or "CALM").strip().casefold()
+    plan_key = EMOTION_TO_PLAN.get(normalized.upper())
+
+    if plan_key is None:
+        if any(word in normalized for word in ("miedo", "ansiedad", "ansioso", "nervioso", "asustado", "preocup")):
+            plan_key = "ansiedad"
+        elif any(word in normalized for word in ("triste", "llanto", "deprim", "pena", "extrañ", "extran")):
+            plan_key = "tristeza"
+        elif any(word in normalized for word in ("enojo", "enfad", "rabia", "molesto", "furia")):
+            plan_key = "enojo"
+        else:
+            plan_key = "acompañamiento"
+
+    plan = PLANS.get(plan_key, CALM_CHECK_IN)
     return plan if allowed is None or plan.key in allowed else CALM_CHECK_IN
 
 
