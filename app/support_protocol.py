@@ -43,8 +43,6 @@ PLANS = {
     ),
 }
 
-# No intenta decidir si existe una emergencia: solo detecta palabras que deben
-# activar acompañamiento humano inmediato y no continuar una conversación de IA.
 RISK_PATTERN = re.compile(
     r"\b(me quiero morir|quiero morir|no quiero vivir|me quiero matar|matarme|suicid\w*|autolesion\w*|"
     r"hacerme daño|hacerme dano|me hacen daño|me hacen dano|me pegan|me golpean|me lastiman|abuso)\b",
