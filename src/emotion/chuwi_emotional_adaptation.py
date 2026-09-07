@@ -18,7 +18,7 @@ class ChuwiEmotionalAdaptation:
 
         if any(word in text for word in ["miedo", "asustado", "temor"]):
             return EmotionalState.FEAR
-        if any(word in text for word in ["triste", "llorar", "solo"]):
+        if any(word in text for word in ["triste", "llorar", "solo", "extraño", "extrano"]):
             return EmotionalState.SAD
         if any(word in text for word in ["nervioso", "ansioso", "preocupado"]):
             return EmotionalState.ANXIOUS

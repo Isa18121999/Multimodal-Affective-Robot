@@ -13,7 +13,8 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
     async def broadcast(self, event: str, data: dict):
         message = json.dumps({
@@ -21,11 +22,11 @@ class ConnectionManager:
             "data": data,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        for connection in self.active_connections:
+        for connection in self.active_connections.copy():
             try:
                 await connection.send_text(message)
             except Exception:
-                self.active_connections.remove(connection)
+                self.disconnect(connection)
 
 
 ws_manager = ConnectionManager()

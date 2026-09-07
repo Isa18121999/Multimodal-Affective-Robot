@@ -1,17 +1,19 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.auth import create_access_token, get_current_user, hash_password, verify_password
-from app.database import async_session, get_db, init_db
+from app.auth import create_access_token, get_current_user, get_user_from_token, hash_password, verify_password
+from app.config import settings, validate_deployment_settings
+from app.database import async_session, engine, get_db, init_db
 from app.models import (
     Interaccion,
     Notificacion,
@@ -32,17 +34,29 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 async def on_startup():
+    validate_deployment_settings()
     await init_db()
     async with async_session() as db:
         result = await db.execute(select(Usuario).where(Usuario.username == "admin"))
         if result.scalar_one_or_none() is None:
-            db.add(Usuario(username="admin", password_hash=hash_password("admin123"), rol="admin"))
+            password = settings.INITIAL_ADMIN_PASSWORD or "admin123"
+            db.add(Usuario(username="admin", password_hash=hash_password(password), rol="admin"))
             await db.commit()
 
 
+@app.get("/health", include_in_schema=False)
+async def healthcheck():
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Base de datos no disponible") from exc
+    return {"status": "ok"}
+
+
 class RegisterRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=128)
     rol: str = "operador"
 
 
@@ -63,7 +77,13 @@ class PatientRegistryRequest(BaseModel):
 
 
 class PatientAccessRequest(BaseModel):
-    motivo: str
+    motivo: str = Field(min_length=3, max_length=250)
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await robot.stop()
+    await engine.dispose()
 
 
 @app.post("/api/login")
@@ -106,7 +126,7 @@ async def robot_stop(current_user: Usuario = Depends(get_current_user)):
 
 
 @app.get("/api/robot/status")
-async def robot_status():
+async def robot_status(current_user: Usuario = Depends(get_current_user)):
     return {
         "state": robot.state.value,
         "session_id": robot.current_session_id,
@@ -218,7 +238,7 @@ async def activate_patient(patient_id: int, db: AsyncSession = Depends(get_db), 
 
 
 @app.get("/api/sessions")
-async def get_sessions(limit: int = 20, db: AsyncSession = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
+async def get_sessions(limit: int = Query(default=20, ge=1, le=100), db: AsyncSession = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
     result = await db.execute(select(SesionRobot).order_by(desc(SesionRobot.inicio)).limit(limit))
     sessions = result.scalars().all()
     session_ids = [session.id for session in sessions]
@@ -236,7 +256,7 @@ async def get_interactions(session_id: int, db: AsyncSession = Depends(get_db), 
 
 
 @app.get("/api/notifications")
-async def get_notifications(limit: int = 50, db: AsyncSession = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
+async def get_notifications(limit: int = Query(default=50, ge=1, le=100), db: AsyncSession = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
     result = await db.execute(select(Notificacion).order_by(desc(Notificacion.timestamp)).limit(limit))
     return [{"id": n.id, "tipo": n.tipo, "mensaje": n.mensaje, "timestamp": n.timestamp.isoformat(), "leida": n.leida, "sesion_id": n.sesion_id} for n in result.scalars().all()]
 
@@ -262,7 +282,16 @@ async def dashboard_stats(db: AsyncSession = Depends(get_db), current_user: Usua
 
 
 @app.websocket("/ws/robot")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(default=None)):
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    try:
+        async with async_session() as db:
+            await get_user_from_token(token, db)
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await ws_manager.connect(websocket)
     try:
         while True:

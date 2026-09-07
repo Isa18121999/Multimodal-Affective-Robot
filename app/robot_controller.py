@@ -353,7 +353,8 @@ class RobotController:
             )
             await self._speak(welcome, db)
 
-            photo_path = tempfile.mktemp(suffix=".jpg")
+            descriptor, photo_path = tempfile.mkstemp(suffix=".jpg")
+            os.close(descriptor)
             try:
                 await asyncio.to_thread(self._take_photo, photo_path)
                 emotion = await self._detect_emotion(photo_path)
