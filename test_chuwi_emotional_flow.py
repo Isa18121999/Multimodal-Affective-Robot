@@ -54,6 +54,7 @@ def run_tests():
         "face": {"emotion": "FEAR", "confidence": 0.9},
     })
     assert conflict["emotion"] == "HAPPY"
+    assert conflict["scores"]["HAPPY"] > conflict["scores"]["FEAR"]
     print("OK - Fusión ponderada ante señales en conflicto")
 
     assert plan_for_emotion("FEAR").key == "respiracion"
