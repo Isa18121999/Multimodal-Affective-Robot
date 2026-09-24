@@ -1,19 +1,33 @@
 dataset:
-  name: Chuwi Facial Emotion Dataset
+  name: Chuwi Unified Facial Emotion Dataset
   input_size: 224
+  manifest_column: class
+  path_column: new_path
 
 classes:
-  - CALM
-  - HAPPY
-  - SAD
-  - FEAR
   - ANGER
-  - SURPRISE
   - DISGUST
+  - FEAR
+  - HAPPY
+  - CALM
+  - SAD
+  - SURPRISE
 
 training:
   batch_size: 32
   learning_rate: 0.0001
+  weight_decay: 0.0001
   epochs: 20
+  early_stopping_patience: 4
   augmentation: true
   class_balancing: true
+  seed: 42
+
+benchmark:
+  models:
+    - mobilenet_v3_large
+    - efficientnet_b0
+    - mobilevit_xxs
+    - deit_tiny
+  selection_metric: macro_f1
+  child_evaluation_source: Children_Emotion
