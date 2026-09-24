@@ -1,8 +1,9 @@
 dataset:
-  name: Chuwi Unified Facial Emotion Dataset
+  name: Chuwi Child Facial Emotion Dataset
   input_size: 224
   manifest_column: class
   path_column: new_path
+  source_filter: Children_Emotion
 
 classes:
   - ANGER
@@ -30,4 +31,4 @@ benchmark:
     - mobilevit_xxs
     - deit_tiny
   selection_metric: macro_f1
-  child_evaluation_source: Children_Emotion
+  evaluation_population: verified_child_images_only
