@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible benchmark for Chuwi facial-expression models."""
+"""Reproducible benchmark for Chuwi child facial-expression models."""
 
 from __future__ import annotations
 
@@ -187,10 +187,15 @@ def main():
     frame = pd.read_csv(manifest)
     validate_manifest(frame, args.dataset_root)
 
+    # Only use the verified child source for emotion training/evaluation.
+    # Micro_Expressions is excluded because its subjects were not verified as children.
+    frame = frame[frame["source"].eq("Children_Emotion")].copy()
+    if frame.empty:
+        raise ValueError("No verified child images found in manifest")
+
     train_frame = frame[frame["split"] == "train"]
     val_frame = frame[frame["split"] == "validation"]
     test_frame = frame[frame["split"] == "test"]
-    child_test = test_frame[test_frame["source"].eq("Children_Emotion")]
 
     normalize = transforms.Normalize(
         [0.485, 0.456, 0.406],
@@ -226,10 +231,6 @@ def main():
         ManifestDataset(test_frame, args.dataset_root, eval_transform),
         shuffle=False, **loader_args
     )
-    child_loader = DataLoader(
-        ManifestDataset(child_test, args.dataset_root, eval_transform),
-        shuffle=False, **loader_args
-    )
 
     args.output.mkdir(parents=True, exist_ok=True)
     results = []
@@ -254,7 +255,6 @@ def main():
         }, checkpoint)
 
         test_metrics = evaluate(model, test_loader, device)
-        child_metrics = evaluate(model, child_loader, device) if len(child_test) else None
         params = sum(p.numel() for p in model.parameters())
 
         results.append({
@@ -265,8 +265,6 @@ def main():
             "test_macro_f1": test_metrics["macro_f1"],
             "test_weighted_f1": test_metrics["weighted_f1"],
             "test_samples": test_metrics["samples"],
-            "children_test_accuracy": child_metrics["accuracy"] if child_metrics else None,
-            "children_test_macro_f1": child_metrics["macro_f1"] if child_metrics else None,
             "training_seconds": training_seconds,
             "test_seconds": test_metrics["seconds"],
             "test_samples_per_second": test_metrics["samples_per_second"],
@@ -276,10 +274,6 @@ def main():
         (args.output / f"{model_name}_test.json").write_text(
             json.dumps(test_metrics, indent=2), encoding="utf-8"
         )
-        if child_metrics:
-            (args.output / f"{model_name}_children_test.json").write_text(
-                json.dumps(child_metrics, indent=2), encoding="utf-8"
-            )
 
     pd.DataFrame(results).to_csv(args.output / "benchmark_results.csv", index=False)
     (args.output / "run_metadata.json").write_text(json.dumps({
@@ -291,7 +285,8 @@ def main():
         "train_samples": len(train_frame),
         "validation_samples": len(val_frame),
         "test_samples": len(test_frame),
-        "children_test_samples": len(child_test),
+        "verified_child_only": True,
+        "source": "Children_Emotion",
         "models": args.models,
     }, indent=2), encoding="utf-8")
 
