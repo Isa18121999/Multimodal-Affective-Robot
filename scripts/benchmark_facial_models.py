@@ -30,7 +30,8 @@ CLASS_MAP = {
     "surprise": "SURPRISE",
 }
 
-CLASSES = ("ANGER", "DISGUST", "FEAR", "HAPPY", "CALM", "SAD", "SURPRISE")
+CANONICAL_CLASSES = ("ANGER", "DISGUST", "FEAR", "HAPPY", "CALM", "SAD", "SURPRISE")
+CLASSES = CANONICAL_CLASSES
 
 
 def seed_everything(seed: int) -> None:
@@ -165,6 +166,7 @@ def train_one(model, train_loader, val_loader, device, epochs, lr, weight_decay,
 
 
 def main():
+    global CLASSES
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=None)
@@ -192,6 +194,22 @@ def main():
     frame = frame[frame["source"].eq("Children_Emotion")].copy()
     if frame.empty:
         raise ValueError("No verified child images found in manifest")
+
+    # Use only emotions that have at least one verified child image.
+    # This prevents an unsupported class (e.g. disgust with zero child samples)
+    # from artificially lowering Macro-F1 or creating a dead output class.
+    present_source_classes = set(frame["class"].unique())
+    unsupported = sorted(set(CLASS_MAP) - present_source_classes)
+    present_canonical = {CLASS_MAP[source_class] for source_class in present_source_classes}
+    benchmark_classes = tuple(
+        canonical for canonical in CANONICAL_CLASSES if canonical in present_canonical
+    )
+    if len(benchmark_classes) < 2:
+        raise ValueError("At least two supported child emotion classes are required")
+    CLASSES = benchmark_classes
+    print(f"Verified child emotions used in benchmark: {CLASSES}")
+    if unsupported:
+        print(f"Excluded child classes with zero samples: {unsupported}")
 
     train_frame = frame[frame["split"] == "train"]
     val_frame = frame[frame["split"] == "validation"]
@@ -282,6 +300,7 @@ def main():
         "dataset_root": str(args.dataset_root),
         "manifest": str(manifest),
         "classes": CLASSES,
+        "excluded_zero_support_source_classes": unsupported,
         "train_samples": len(train_frame),
         "validation_samples": len(val_frame),
         "test_samples": len(test_frame),
