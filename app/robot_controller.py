@@ -162,13 +162,14 @@ class RobotController:
             if self.state == RobotState.INTERACTING:
                 self._stop_event.set()
 
-        # Keep the selected ID only while it is visible. Do not silently switch
-        # an ongoing interaction to another person's face.
+        # Keep the selected ID only while visible. A disappeared face clears
+        # the selection; the next camera cycle can select a new visible track.
         if self._active_person_for_interaction:
-            if self._active_person_for_interaction in visible_ids:
-                self.active_person_id = self._active_person_for_interaction
-            else:
-                self.active_person_id = None
+            self.active_person_id = (
+                self._active_person_for_interaction
+                if self._active_person_for_interaction in visible_ids
+                else None
+            )
         elif self.active_person_id not in visible_ids:
             self.active_person_id = (
                 max(visible_tracks, key=lambda track: track.bbox[2] * track.bbox[3]).person_id
