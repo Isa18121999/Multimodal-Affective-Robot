@@ -253,11 +253,28 @@ class RobotController:
             raw_emotion = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             emotion = self.emotional_manager.normalize_emotion(raw_emotion)
             if emotion not in {"HAPPY", "SAD", "FRUSTRATED", "FEAR", "ANXIOUS", "CALM"}:
-                emotion = "CALM"
-            return {"emotion": emotion, "confidence": 0.75, "source": "face"}
+                return {
+                    "emotion": "UNKNOWN",
+                    "confidence": 0.0,
+                    "source": "face",
+                    "available": False,
+                }
+            # A generative model does not provide a calibrated emotion probability
+            # through this prompt. Do not report a fabricated confidence value.
+            return {
+                "emotion": emotion,
+                "confidence": 0.0,
+                "source": "face",
+                "available": False,
+            }
         except Exception as exc:
             print(f"Emotion error: {exc}")
-            return {"emotion": "CALM", "confidence": 0.0, "source": "face"}
+            return {
+                "emotion": "UNKNOWN",
+                "confidence": 0.0,
+                "source": "face",
+                "available": False,
+            }
 
     def _build_modalities(self) -> dict:
         modalities = {}
