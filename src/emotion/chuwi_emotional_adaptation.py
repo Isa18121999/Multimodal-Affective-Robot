@@ -11,27 +11,30 @@ class EmotionalState(Enum):
 
 
 class ChuwiEmotionalAdaptation:
-    """Algoritmo base de adaptación emocional para pacientes pediátricos."""
+    """Rule-based text emotion detector. Empty text is UNKNOWN, not CALM."""
+
+    KEYWORDS = {
+        EmotionalState.FEAR: ("miedo", "asustado", "temor"),
+        EmotionalState.SAD: ("triste", "llorar", "solo", "extraño", "extrano"),
+        EmotionalState.ANXIOUS: ("nervioso", "ansioso", "preocupado"),
+        EmotionalState.FRUSTRATED: ("enojado", "molesto", "frustrado"),
+        EmotionalState.HAPPY: ("feliz", "genial", "bien"),
+    }
 
     def analyze_text(self, message):
-        text = (message or "").lower().strip()
+        text = (message or "").casefold().strip()
         if not text:
             return None
 
-        if any(word in text for word in ["miedo", "asustado", "temor"]):
-            return EmotionalState.FEAR
-        if any(word in text for word in ["triste", "llorar", "solo", "extraño", "extrano"]):
-            return EmotionalState.SAD
-        if any(word in text for word in ["nervioso", "ansioso", "preocupado"]):
-            return EmotionalState.ANXIOUS
-        if any(word in text for word in ["enojado", "molesto", "frustrado"]):
-            return EmotionalState.FRUSTRATED
-        if any(word in text for word in ["feliz", "genial", "bien"]):
-            return EmotionalState.HAPPY
+        # Preserve the current rule-based precedence while avoiding a false calm
+        # classification when there is no user statement to analyze.
+        for state, words in self.KEYWORDS.items():
+            if any(word in text for word in words):
+                return state
         return EmotionalState.CALM
 
     def detect_emotion(self, message):
-        """Devuelve un estado o UNKNOWN si el mensaje no aporta evidencia textual."""
+        """Return the canonical state name or UNKNOWN for empty input."""
         state = self.analyze_text(message)
         return state.name if state is not None else "UNKNOWN"
 
