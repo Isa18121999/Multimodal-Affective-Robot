@@ -440,6 +440,7 @@ class RobotController:
                 print(f"Robot loop error: {exc}")
                 await asyncio.sleep(1)
         self.state = RobotState.STOPPED
+        await ws_manager.broadcast("robot_state", {"state": self.state.value})
 
     async def _close_interaction_for_lost_person(self, db, session) -> None:
         """Close the current session without attributing it to another face."""
