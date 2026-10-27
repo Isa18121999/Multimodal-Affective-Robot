@@ -488,6 +488,8 @@ class RobotController:
             descriptor, photo_path = tempfile.mkstemp(suffix=".jpg")
             os.close(descriptor)
             try:
+                if self._active_person_for_interaction is None:
+                    raise RuntimeError("La persona seleccionada ya no está visible")
                 await asyncio.to_thread(self._take_photo, photo_path)
                 self.current_face_signal = await self._detect_emotion(photo_path)
             except Exception as exc:
