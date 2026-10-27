@@ -77,6 +77,8 @@ class ChuwiEmotionalManager:
         emotion = fused["emotion"]
         if emotion == "UNKNOWN":
             strategy = "acompanamiento"
+        elif emotion == "SURPRISE":
+            strategy = "conversacion_general"
         else:
             database_emotion = self.EMOTION_DB_MAP.get(emotion, emotion.lower())
             strategy = self.database.get_strategy(database_emotion)
