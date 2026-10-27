@@ -477,6 +477,7 @@ class RobotController:
         self._active_person_for_interaction = None
         self._name_prompt_pending = False
         self.active_person_id = None
+        self._stop_event.clear()
         self.state = RobotState.WAITING
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
         await self._broadcast_people()
