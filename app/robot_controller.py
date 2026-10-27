@@ -603,8 +603,8 @@ class RobotController:
                 await self._close_interaction_for_lost_person(db, session)
                 return
 
-            initial_result = self._analyze_emotion(name_reply or "")
-            if initial_result["emotion"] == "UNKNOWN":
+            emotional_result = self._analyze_emotion(name_reply or "")
+            if emotional_result["emotion"] == "UNKNOWN":
                 # Keep the interaction bound to the same person while asking an
                 # open-ended question; do not assume a default emotional state.
                 self.current_emotion = None
@@ -689,13 +689,13 @@ class RobotController:
                     await self._close_interaction_for_lost_person(db, session)
                     return
 
-            self.current_emotion = initial_result["emotion"]
+            self.current_emotion = emotional_result["emotion"]
             await ws_manager.broadcast(
                 "robot_emotion",
                 {
                     "emotion": self.current_emotion,
-                    "confidence": initial_result["confidence"],
-                    "scores": initial_result["scores"],
+                    "confidence": emotional_result["confidence"],
+                    "scores": emotional_result["scores"],
                     "sesion_id": session.id,
                 },
             )
