@@ -151,13 +151,15 @@ class RobotController:
         self.current_people = self.person_tracker.snapshot()
         visible_ids = {track.person_id for track in visible_tracks}
         if self._active_person_for_interaction and self._active_person_for_interaction not in visible_ids:
-            # The selected face vanished. End this interaction's identity binding:
-            # a different face must not inherit the current child's name/emotion.
+            # The selected face vanished. End the association and end this
+            # interaction so the next visible person cannot inherit its context.
             self._active_person_for_interaction = None
             self._name_prompt_pending = False
             self.current_child_name = None
             self.current_face_signal = None
             self.current_voice_signal = None
+            if self.state == RobotState.INTERACTING:
+                self._stop_event.set()
 
         # Keep the selected ID only while it is visible. Do not silently switch
         # an ongoing interaction to another person's face.
