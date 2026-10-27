@@ -59,9 +59,18 @@ class ChuwiEmotionalManager:
         for modality, signal in (modalities or {}).items():
             if not signal:
                 continue
+            normalized = self.normalize_emotion(signal.get("emotion"))
+            if normalized == "UNKNOWN":
+                signals[modality] = {
+                    **signal,
+                    "emotion": "UNKNOWN",
+                    "available": False,
+                    "confidence": 0.0,
+                }
+                continue
             signals[modality] = {
                 **signal,
-                "emotion": self.normalize_emotion(signal.get("emotion")),
+                "emotion": normalized,
             }
 
         fused = self.fusion.fuse(signals)
