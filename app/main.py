@@ -7,7 +7,6 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from pydantic import BaseModel
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
@@ -15,9 +14,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.auth import create_access_token, get_current_user, get_user_from_token, hash_password, verify_password
 from app.config import settings, validate_deployment_settings
 from app.database import async_session, engine, get_db, init_db
-from app.auth import create_access_token, get_current_user, hash_password, verify_password
-from app.config import settings, validate_deployment_settings
-from app.database import async_session, get_db, init_db
 from app.models import (
     Interaccion,
     Notificacion,
@@ -43,7 +39,11 @@ async def on_startup():
     async with async_session() as db:
         result = await db.execute(select(Usuario).where(Usuario.username == "admin"))
         if result.scalar_one_or_none() is None:
-            password = settings.INITIAL_ADMIN_PASSWORD or "admin123"
+            password = settings.INITIAL_ADMIN_PASSWORD
+            if not password:
+                raise RuntimeError(
+                    "INITIAL_ADMIN_PASSWORD debe configurarse para crear el administrador inicial."
+                )
             db.add(Usuario(username="admin", password_hash=hash_password(password), rol="admin"))
             await db.commit()
 
@@ -139,6 +139,9 @@ async def robot_status(current_user: Usuario = Depends(get_current_user)):
         "emotion": getattr(robot, "current_emotion", None),
         "last_speech": getattr(robot, "last_speech", None),
         "listening": getattr(robot, "listening", False),
+        "people": getattr(robot, "current_people", []),
+        "active_person_id": getattr(robot, "active_person_id", None),
+        "active_person_name": getattr(robot, "current_child_name", None),
     }
 
 
@@ -298,6 +301,22 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
         return
     await ws_manager.connect(websocket)
     try:
+        # Rehydrate the dashboard immediately on connect/reconnect instead of
+        # waiting for the next camera polling cycle.
+        await websocket.send_json({
+            "event": "robot_people",
+            "data": {
+                "people": getattr(robot, "current_people", []),
+                "active_person_id": getattr(robot, "active_person_id", None),
+                "active_person_name": getattr(robot, "current_child_name", None),
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        await websocket.send_json({
+            "event": "robot_state",
+            "data": {"state": robot.state.value},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
