@@ -167,9 +167,8 @@ class RobotController:
         self.current_people = self.person_tracker.snapshot()
         visible_ids = {track.person_id for track in visible_tracks}
         if self._active_person_for_interaction and self._active_person_for_interaction not in visible_ids:
-            # The selected face vanished. End the association and end this
-            # interaction so the next visible person cannot inherit its context.
-            self._active_person_for_interaction = None
+            # Keep the old ID until _close_interaction_for_lost_person runs;
+            # this prevents the old session from being bound to a new track.
             self._name_prompt_pending = False
             self.active_person_id = None
             self.current_child_name = None
