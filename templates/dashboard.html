@@ -43,6 +43,19 @@
 
     <div class="grid grid-2">
         <div class="card">
+            <h3>👥 Personas detectadas</h3>
+            <p style="color:var(--text-muted);font-size:.82rem;margin:.35rem 0 1rem;">IDs temporales; no se almacenan fotografías ni plantillas faciales.</p>
+            <div id="people-list"><p style="color:var(--text-muted);font-size:.85rem;">Esperando cámara...</p></div>
+        </div>
+
+        <div class="card">
+            <h3>Emociones Detectadas</h3>
+            <div id="emotions-chart" style="margin-top:1rem;"></div>
+        </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:1.5rem;">
+        <div class="card">
             <h3>Control del Robot</h3>
             <div style="display:flex; gap:1rem; margin-top:1rem;">
                 <button class="btn btn-success" id="btn-start" onclick="startRobot()">▶ Iniciar</button>
@@ -52,8 +65,8 @@
         </div>
 
         <div class="card">
-            <h3>Emociones Detectadas</h3>
-            <div id="emotions-chart" style="margin-top:1rem;"></div>
+            <h3>Persona activa</h3>
+            <div id="active-person" style="margin-top:1rem;color:var(--text-muted);">Ninguna</div>
         </div>
     </div>
 
@@ -80,6 +93,28 @@
         return node.innerHTML;
     }
 
+    function renderPeople(people, activeId, activeName) {
+        const list = document.getElementById('people-list');
+        const active = document.getElementById('active-person');
+        if (!people || people.length === 0) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:.85rem;">No hay personas visibles.</p>';
+            active.innerHTML = 'Ninguna';
+            return;
+        }
+        list.innerHTML = people.map(p => {
+            const isActive = p.person_id === activeId;
+            const label = p.name ? escapeHtml(p.name) : 'Nombre pendiente';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:.7rem;border:1px solid ${isActive ? 'var(--success)' : 'var(--border)'};border-radius:8px;margin-bottom:.5rem;">
+                <div><strong>${isActive ? '🟢' : '🔵'} ${escapeHtml(p.person_id)}</strong><div style="font-size:.8rem;color:var(--text-muted);margin-top:.2rem;">${label}</div></div>
+                <span class="badge ${p.name ? 'badge-success' : 'badge-warning'}">${p.name ? 'Nombre asociado' : 'Nuevo'}</span>
+            </div>`;
+        }).join('');
+        const selected = people.find(p => p.person_id === activeId);
+        active.innerHTML = selected
+            ? `<strong>${escapeHtml(selected.name || activeName || selected.person_id)}</strong><div style="font-size:.82rem;color:var(--text-muted);margin-top:.25rem;">ID temporal: ${escapeHtml(selected.person_id)}</div>`
+            : 'Ninguna';
+    }
+
     function connectWS() {
         const token = getToken();
         if (!token) return;
@@ -96,6 +131,9 @@
                 } else {
                     hideInteractionBanner();
                 }
+            }
+            if (msg.event === 'robot_people') {
+                renderPeople(msg.data.people || [], msg.data.active_person_id, msg.data.active_person_name);
             }
             if (msg.event === 'robot_speak') addLog(`🔊 ${msg.data.text}`);
             if (msg.event === 'notificacion') { showToast(`🔔 ${msg.data.mensaje}`); loadNotifications(); loadStats(); }
