@@ -604,6 +604,38 @@ class RobotController:
                 return
 
             initial_result = self._analyze_emotion(name_reply or "")
+            if initial_result["emotion"] == "UNKNOWN":
+                # Uncertainty should trigger neutral, non-assumptive support;
+                # never turn unavailable modalities into an emotion label.
+                self.current_emotion = None
+                await ws_manager.broadcast(
+                    "robot_emotion",
+                    {
+                        "emotion": "UNKNOWN",
+                        "confidence": 0.0,
+                        "scores": {},
+                        "sesion_id": session.id,
+                    },
+                )
+                await self._save_interaction(
+                    db, "robot", "Todavía no puedo interpretar cómo te sientes. ¿Quieres contarme?"
+                )
+                await self._speak(
+                    "Todavía no puedo interpretar cómo te sientes. ¿Quieres contarme cómo estás?",
+                    db,
+                )
+                session.emocion_inicial = None
+                await db.commit()
+                self._active_person_for_interaction = None
+                self._name_prompt_pending = False
+                await ws_manager.broadcast(
+                    "robot_state", {"state": RobotState.WAITING.value}
+                )
+                self.state = RobotState.WAITING
+                await self._broadcast_people()
+                # Continue the conversational loop without manufacturing an
+                # initial emotional category.
+                return
             self.current_emotion = initial_result["emotion"]
             await ws_manager.broadcast(
                 "robot_emotion",
