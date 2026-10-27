@@ -155,6 +155,7 @@ class RobotController:
             # interaction so the next visible person cannot inherit its context.
             self._active_person_for_interaction = None
             self._name_prompt_pending = False
+            self.active_person_id = None
             self.current_child_name = None
             self.current_face_signal = None
             self.current_voice_signal = None
