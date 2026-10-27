@@ -27,6 +27,7 @@ from app.support_protocol import (
 from app.websocket_manager import ws_manager
 from src.emotion.chuwi_emotional_manager import ChuwiEmotionalManager
 from src.integration.voice_emotion_analyzer import VoiceEmotionAnalyzer
+from app.person_runtime import create_person_tracker, publish_people
 
 
 class RobotState(str, Enum):
@@ -57,6 +58,12 @@ class RobotController:
         self.listening = False
         self.emotional_manager = emotional_manager or ChuwiEmotionalManager()
         self.voice_emotion_analyzer = VoiceEmotionAnalyzer()
+        self.person_tracker = create_person_tracker()
+        self.current_people: list[dict] = []
+        self.active_person_id: str | None = None
+        self._active_person_for_interaction: str | None = None
+        self._person_event_loop: asyncio.AbstractEventLoop | None = None
+        self._name_prompt_pending = False
 
     def set_active_profile(self, profile: dict | None):
         self.active_profile = profile
@@ -73,8 +80,15 @@ class RobotController:
     async def start(self):
         if self.is_running:
             return
+        self.person_tracker.clear()
+        self.current_people = []
+        self.active_person_id = None
+        self._active_person_for_interaction = None
+        self.current_child_name = None
+        self._person_event_loop = asyncio.get_running_loop()
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop())
+        await self._broadcast_people()
 
     async def stop(self):
         self._stop_event.set()
@@ -85,6 +99,11 @@ class RobotController:
             self.cap.release()
             self.cap = None
         self.state = RobotState.STOPPED
+        self.person_tracker.clear()
+        self.current_people = []
+        self.active_person_id = None
+        self._active_person_for_interaction = None
+        self._person_event_loop = None
         self.current_session_id = None
         self.current_child_name = None
         self.current_emotion = None
@@ -93,6 +112,10 @@ class RobotController:
         self.last_speech = None
         self.listening = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        # Clear stale face/name state in any connected dashboard before dropping the loop.
+        self._person_event_loop = asyncio.get_running_loop()
+        await self._broadcast_people()
+        self._person_event_loop = None
 
     def update_distance(self, distance_cm: float):
         self.distance_cm = distance_cm
@@ -103,22 +126,63 @@ class RobotController:
             self.cap = cv2.VideoCapture(0)
 
     def _detect_face(self) -> bool:
+        """Capture one frame and update all temporary person tracks from that frame."""
         self._init_camera()
-        ret, frame = self.cap.read()
-        if not ret:
+        if self.cap is None or not self.cap.isOpened():
+            self.current_people = []
+            self.active_person_id = None
+            self.person_tracker.clear()
+            publish_people(self)
             return False
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            self.current_people = []
+            self.active_person_id = None
+            self.person_tracker.clear()
+            publish_people(self)
+            return False
+
+        visible_tracks = self.person_tracker.update(frame)
+        self.current_people = self.person_tracker.snapshot()
+        visible_ids = {track.person_id for track in visible_tracks}
+
+        # Keep the selected ID only while it is visible. Do not silently switch
+        # an ongoing interaction to another person's face.
+        if self._active_person_for_interaction:
+            if self._active_person_for_interaction in visible_ids:
+                self.active_person_id = self._active_person_for_interaction
+            else:
+                self.active_person_id = None
+        elif self.active_person_id not in visible_ids:
+            self.active_person_id = (
+                max(visible_tracks, key=lambda track: track.bbox[2] * track.bbox[3]).person_id
+                if visible_tracks
+                else None
+            )
+
+        publish_people(self)
+        return bool(visible_tracks)
+
+    async def _broadcast_people(self) -> None:
+        await ws_manager.broadcast(
+            "robot_people",
+            {
+                "people": self.current_people,
+                "active_person_id": self.active_person_id,
+                "active_person_name": self.current_child_name,
+            },
         )
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
-        return len(faces) > 0
 
     def _take_photo(self, path: str):
+        """Save a temporary interaction image; caller removes it after inference."""
         self._init_camera()
+        if self.cap is None or not self.cap.isOpened():
+            raise RuntimeError("La cámara no está disponible")
         ret, frame = self.cap.read()
-        if ret:
-            cv2.imwrite(path, frame)
+        if not ret or frame is None:
+            raise RuntimeError("No se pudo capturar la imagen para inferencia")
+        cv2.imwrite(path, frame)
 
     async def _detect_emotion(self, image_path: str) -> dict:
         """Obtiene la señal facial y la normaliza al vocabulario de Chuwi."""
@@ -341,7 +405,16 @@ class RobotController:
 
     async def _interact(self):
         self.state = RobotState.INTERACTING
-        self.current_child_name = None
+        # Lock the selected face before asking for a name. If no current face is
+        # available, do not attach a name to an unrelated future detection.
+        visible_ids = {person["person_id"] for person in self.current_people}
+        self._active_person_for_interaction = (
+            self.active_person_id if self.active_person_id in visible_ids else None
+        )
+        self._name_prompt_pending = self._active_person_for_interaction is not None
+        selected_track = self.person_tracker.tracks.get(self._active_person_for_interaction or "")
+        known_name = selected_track.name if selected_track else None
+        self.current_child_name = known_name
         self.current_emotion = None
         self.current_face_signal = None
         self.current_voice_signal = None
@@ -366,11 +439,24 @@ class RobotController:
             )
 
             self.historial = []
-            await self._save_interaction(db, "robot", self.GREETING)
-            await self._speak(self.GREETING, db)
+            greeting = (
+                f"¡Hola, {known_name}! Qué alegría verte otra vez. ¿Cómo estás?"
+                if known_name
+                else self.GREETING
+            )
+            await self._save_interaction(db, "robot", greeting)
+            await self._speak(greeting, db)
 
-            name_reply = await self._listen()
-            self.current_child_name = self._extract_name(name_reply) if name_reply else None
+            name_reply = await self._listen() if not known_name else ""
+            if self._name_prompt_pending and name_reply:
+                candidate_name = self._extract_name(name_reply)
+                if candidate_name and self.person_tracker.associate_name(
+                    self._active_person_for_interaction or "", candidate_name
+                ):
+                    self.current_child_name = candidate_name
+                    self.current_people = self.person_tracker.snapshot()
+                    await self._broadcast_people()
+                self._name_prompt_pending = False
             if name_reply:
                 await self._save_interaction(db, "usuario", "[nombre compartido]")
 
@@ -387,6 +473,11 @@ class RobotController:
             try:
                 await asyncio.to_thread(self._take_photo, photo_path)
                 self.current_face_signal = await self._detect_emotion(photo_path)
+            except Exception as exc:
+                print(f"Photo capture error: {exc}")
+                self.current_face_signal = {
+                    "emotion": "UNKNOWN", "confidence": 0.0, "source": "face", "available": False
+                }
             finally:
                 try:
                     os.remove(photo_path)
@@ -479,8 +570,11 @@ class RobotController:
         self.current_face_signal = None
         self.current_voice_signal = None
         self.listening = False
+        self._active_person_for_interaction = None
+        self._name_prompt_pending = False
         self.state = RobotState.WAITING
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        await self._broadcast_people()
         await asyncio.sleep(5)
 
 
