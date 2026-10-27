@@ -7,12 +7,14 @@ the active interaction.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from functools import wraps
 
 import cv2
 
 from src.identity.person_tracker import PersonTracker
+from app.websocket_manager import ws_manager
 
 
 def install_person_tracking(robot) -> None:
@@ -32,6 +34,7 @@ def install_person_tracking(robot) -> None:
     robot.current_people = []
     robot.active_person_id = None
     robot._person_tracking_installed = True
+    robot._person_event_loop = None
 
     original_detect_face = robot._detect_face
 
@@ -48,12 +51,21 @@ def install_person_tracking(robot) -> None:
         tracks = tracker.update(frame)
         robot.current_people = tracker.snapshot()
         if tracks:
-            # The largest visible face is the deterministic interaction candidate.
             selected = max(tracks, key=lambda t: t.bbox[2] * t.bbox[3])
             if robot.active_person_id not in {t.person_id for t in tracks}:
                 robot.active_person_id = selected.person_id
         else:
             robot.active_person_id = None
+
+        loop = getattr(robot, "_person_event_loop", None)
+        if loop and not loop.is_closed():
+            payload = {
+                "people": robot.current_people,
+                "active_person_id": robot.active_person_id,
+            }
+            asyncio.run_coroutine_threadsafe(
+                ws_manager.broadcast("robot_people", payload), loop
+            )
         return bool(tracks)
 
     robot._detect_face = detect_face_with_people
@@ -62,11 +74,30 @@ def install_person_tracking(robot) -> None:
 
     @wraps(original_interact)
     async def interact_with_person():
-        # Preserve the person selected immediately before the interaction.
         selected_id = robot.active_person_id
         robot._active_person_for_interaction = selected_id
-        await original_interact()
-        robot._active_person_for_interaction = None
+        robot._person_name_associated = False
+
+        track = next((t for t in tracker.tracks.values() if t.person_id == selected_id), None)
+        known_name = track.name if track else None
+        original_greeting = robot.GREETING
+        original_extract = robot._extract_name
+
+        if known_name:
+            robot.GREETING = f"¡Hola, {known_name}! Qué alegría verte otra vez. ¿Cómo estás?"
+
+            def extract_known_name(_text, _known_name=known_name):
+                return _known_name
+
+            robot._extract_name = extract_known_name
+
+        try:
+            await original_interact()
+        finally:
+            robot.GREETING = original_greeting
+            robot._extract_name = original_extract
+            robot._active_person_for_interaction = None
+            robot._person_name_associated = False
 
     robot._interact = interact_with_person
 
@@ -76,8 +107,6 @@ def install_person_tracking(robot) -> None:
     async def listen_with_name_association():
         text = await original_listen()
         selected_id = getattr(robot, "_active_person_for_interaction", None)
-        # The first listening turn is the name question. Associate only when a
-        # valid name is extracted; later conversational turns are ignored.
         if selected_id and not getattr(robot, "_person_name_associated", False):
             extractor = getattr(robot, "_extract_name", None)
             name = extractor(text) if extractor else None
@@ -85,10 +114,22 @@ def install_person_tracking(robot) -> None:
                 robot.current_child_name = name
                 robot.current_people = tracker.snapshot()
                 robot._person_name_associated = True
+                loop = getattr(robot, "_person_event_loop", None)
+                if loop and not loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        ws_manager.broadcast(
+                            "robot_people",
+                            {
+                                "people": robot.current_people,
+                                "active_person_id": robot.active_person_id,
+                                "active_person_name": name,
+                            },
+                        ),
+                        loop,
+                    )
         return text
 
     robot._listen = listen_with_name_association
-    robot._person_name_associated = False
 
     original_start = robot.start
 
@@ -99,6 +140,7 @@ def install_person_tracking(robot) -> None:
         robot.current_people = []
         robot.active_person_id = None
         robot._person_name_associated = False
+        robot._person_event_loop = asyncio.get_running_loop()
         await original_start()
 
     robot.start = start_with_person_reset
@@ -112,6 +154,7 @@ def install_person_tracking(robot) -> None:
         robot.current_people = []
         robot.active_person_id = None
         robot._person_name_associated = False
+        robot._person_event_loop = None
         await original_stop()
 
     robot.stop = stop_with_person_reset
