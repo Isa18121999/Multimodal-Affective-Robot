@@ -439,8 +439,7 @@ class RobotController:
         )
 
     async def _run_loop(self):
-        self.state = RobotState.WAITING
-        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        # State was set and broadcast by start() before this task was created.
         while not self._stop_event.is_set():
             try:
                 has_face = await asyncio.to_thread(self._detect_face)
