@@ -27,8 +27,8 @@ class ChuwiEmotionalManager:
         "anxious": "ANXIOUS",
         "neutral": "CALM",
         "calm": "CALM",
-        "sorprendido": "CALM",
-        "surprised": "CALM",
+        "sorprendido": "SURPRISE",
+        "surprised": "SURPRISE",
     }
 
     def __init__(self, fusion=None):
