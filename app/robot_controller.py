@@ -252,15 +252,11 @@ class RobotController:
                 data = response.json()
             raw_emotion = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             emotion = self.emotional_manager.normalize_emotion(raw_emotion)
-            if emotion not in {"HAPPY", "SAD", "FRUSTRATED", "FEAR", "ANXIOUS", "CALM"}:
-                return {
-                    "emotion": "UNKNOWN",
-                    "confidence": 0.0,
-                    "source": "face",
-                    "available": False,
-                }
-            # A generative model does not provide a calibrated emotion probability
-            # through this prompt. Do not report a fabricated confidence value.
+            # Do not claim calibrated facial emotion recognition from a prompt-only
+            # generative response. Preserve the label for debugging only; it is
+            # explicitly unavailable to multimodal fusion until validated.
+            if emotion not in {"HAPPY", "SAD", "FRUSTRATED", "FEAR", "ANXIOUS", "CALM", "SURPRISE"}:
+                emotion = "UNKNOWN"
             return {
                 "emotion": emotion,
                 "confidence": 0.0,
