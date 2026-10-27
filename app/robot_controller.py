@@ -492,6 +492,13 @@ class RobotController:
                     raise RuntimeError("La persona seleccionada ya no está visible")
                 await asyncio.to_thread(self._take_photo, photo_path)
                 self.current_face_signal = await self._detect_emotion(photo_path)
+                # Do not attach a facial signal to a different face if the
+                # selected track disappeared during the external inference call.
+                if self._active_person_for_interaction is None:
+                    self.current_face_signal = {
+                        "emotion": "UNKNOWN", "confidence": 0.0,
+                        "source": "face", "available": False
+                    }
             except Exception as exc:
                 print(f"Photo capture error: {exc}")
                 self.current_face_signal = {
