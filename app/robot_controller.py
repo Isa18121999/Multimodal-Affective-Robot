@@ -410,8 +410,6 @@ class RobotController:
             try:
                 has_face = await asyncio.to_thread(self._detect_face)
                 if has_face and self.state == RobotState.WAITING:
-                    # Reset cancellation left by a prior interrupted interaction.
-                    self._stop_event.clear()
                     await self._interact()
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
@@ -442,7 +440,6 @@ class RobotController:
         self._active_person_for_interaction = None
         self._name_prompt_pending = False
         self.state = RobotState.WAITING
-        self._stop_event.clear()
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
         await self._broadcast_people()
 
