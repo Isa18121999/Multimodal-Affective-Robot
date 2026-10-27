@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Reproducible benchmark for Chuwi child facial-expression models."""
+"""Reproducible benchmark for Chuwi child facial-expression models.
+
+The validation split is used for model/checkpoint selection. The test split is
+only evaluated when --evaluate-test is explicitly requested, so it remains an
+unseen final evaluation set by default.
+"""
 
 from __future__ import annotations
 
@@ -53,7 +58,8 @@ class ManifestDataset(Dataset):
 
     def __getitem__(self, index: int):
         row = self.frame.iloc[index]
-        image = Image.open(self.root / row["new_path"]).convert("RGB")
+        with Image.open(self.root / row["new_path"]) as image_file:
+            image = image_file.convert("RGB")
         return self.transform(image), CLASSES.index(CLASS_MAP[row["class"]])
 
 
@@ -181,6 +187,11 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--evaluate-test",
+        action="store_true",
+        help="Evaluate the untouched test split once the benchmark configuration is fixed.",
+    )
     args = parser.parse_args()
 
     seed_everything(args.seed)
@@ -190,14 +201,10 @@ def main():
     validate_manifest(frame, args.dataset_root)
 
     # Only use the verified child source for emotion training/evaluation.
-    # Micro_Expressions is excluded because its subjects were not verified as children.
     frame = frame[frame["source"].eq("Children_Emotion")].copy()
     if frame.empty:
         raise ValueError("No verified child images found in manifest")
 
-    # Use only emotions that have at least one verified child image.
-    # This prevents an unsupported class (e.g. disgust with zero child samples)
-    # from artificially lowering Macro-F1 or creating a dead output class.
     present_source_classes = set(frame["class"].unique())
     unsupported = sorted(set(CLASS_MAP) - present_source_classes)
     present_canonical = {CLASS_MAP[source_class] for source_class in present_source_classes}
@@ -214,6 +221,8 @@ def main():
     train_frame = frame[frame["split"] == "train"]
     val_frame = frame[frame["split"] == "validation"]
     test_frame = frame[frame["split"] == "test"]
+    if train_frame.empty or val_frame.empty:
+        raise ValueError("Train and validation splits must both contain samples")
 
     normalize = transforms.Normalize(
         [0.485, 0.456, 0.406],
@@ -248,7 +257,7 @@ def main():
     test_loader = DataLoader(
         ManifestDataset(test_frame, args.dataset_root, eval_transform),
         shuffle=False, **loader_args
-    )
+    ) if not test_frame.empty else None
 
     args.output.mkdir(parents=True, exist_ok=True)
     results = []
@@ -263,6 +272,7 @@ def main():
         )
         training_seconds = time.perf_counter() - start_train
 
+        val_metrics = evaluate(model, val_loader, device)
         checkpoint = args.output / f"{model_name}.pt"
         torch.save({
             "model_state_dict": model.state_dict(),
@@ -270,28 +280,43 @@ def main():
             "classes": CLASSES,
             "seed": args.seed,
             "input_size": 224,
+            "selection_split": "validation",
+            "best_validation_macro_f1": best_val_f1,
         }, checkpoint)
 
-        test_metrics = evaluate(model, test_loader, device)
-        params = sum(p.numel() for p in model.parameters())
-
-        results.append({
+        row = {
             "model": model_name,
-            "parameters": params,
+            "parameters": sum(p.numel() for p in model.parameters()),
             "best_validation_macro_f1": best_val_f1,
-            "test_accuracy": test_metrics["accuracy"],
-            "test_macro_f1": test_metrics["macro_f1"],
-            "test_weighted_f1": test_metrics["weighted_f1"],
-            "test_samples": test_metrics["samples"],
+            "validation_accuracy": val_metrics["accuracy"],
+            "validation_macro_f1": val_metrics["macro_f1"],
+            "validation_weighted_f1": val_metrics["weighted_f1"],
+            "validation_samples": val_metrics["samples"],
             "training_seconds": training_seconds,
-            "test_seconds": test_metrics["seconds"],
-            "test_samples_per_second": test_metrics["samples_per_second"],
             "checkpoint": str(checkpoint),
-        })
+        }
 
-        (args.output / f"{model_name}_test.json").write_text(
-            json.dumps(test_metrics, indent=2), encoding="utf-8"
+        (args.output / f"{model_name}_validation.json").write_text(
+            json.dumps(val_metrics, indent=2), encoding="utf-8"
         )
+
+        if args.evaluate_test:
+            if test_loader is None:
+                raise ValueError("--evaluate-test was requested but the test split is empty")
+            test_metrics = evaluate(model, test_loader, device)
+            row.update({
+                "test_accuracy": test_metrics["accuracy"],
+                "test_macro_f1": test_metrics["macro_f1"],
+                "test_weighted_f1": test_metrics["weighted_f1"],
+                "test_samples": test_metrics["samples"],
+                "test_seconds": test_metrics["seconds"],
+                "test_samples_per_second": test_metrics["samples_per_second"],
+            })
+            (args.output / f"{model_name}_test.json").write_text(
+                json.dumps(test_metrics, indent=2), encoding="utf-8"
+            )
+
+        results.append(row)
 
     pd.DataFrame(results).to_csv(args.output / "benchmark_results.csv", index=False)
     (args.output / "run_metadata.json").write_text(json.dumps({
@@ -307,9 +332,13 @@ def main():
         "verified_child_only": True,
         "source": "Children_Emotion",
         "models": args.models,
+        "test_evaluated": bool(args.evaluate_test),
+        "selection_split": "validation",
     }, indent=2), encoding="utf-8")
 
     print(f"\nBenchmark complete: {args.output}")
+    if not args.evaluate_test:
+        print("Test split was NOT evaluated. Use --evaluate-test only for the final locked evaluation.")
 
 
 if __name__ == "__main__":
