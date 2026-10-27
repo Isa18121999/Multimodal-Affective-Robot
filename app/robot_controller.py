@@ -605,8 +605,8 @@ class RobotController:
 
             initial_result = self._analyze_emotion(name_reply or "")
             if initial_result["emotion"] == "UNKNOWN":
-                # Uncertainty should trigger neutral, non-assumptive support;
-                # never turn unavailable modalities into an emotion label.
+                # Keep the interaction bound to the same person while asking an
+                # open-ended question; do not assume a default emotional state.
                 self.current_emotion = None
                 await ws_manager.broadcast(
                     "robot_emotion",
@@ -617,25 +617,78 @@ class RobotController:
                         "sesion_id": session.id,
                     },
                 )
-                await self._save_interaction(
-                    db, "robot", "Todavía no puedo interpretar cómo te sientes. ¿Quieres contarme?"
-                )
-                await self._speak(
-                    "Todavía no puedo interpretar cómo te sientes. ¿Quieres contarme cómo estás?",
-                    db,
-                )
+                question = "Todavía no puedo interpretar cómo te sientes. ¿Quieres contarme cómo estás?"
+                await self._save_interaction(db, "robot", question)
+                await self._speak(question, db)
                 session.emocion_inicial = None
                 await db.commit()
-                self._active_person_for_interaction = None
-                self._name_prompt_pending = False
-                await ws_manager.broadcast(
-                    "robot_state", {"state": RobotState.WAITING.value}
-                )
-                self.state = RobotState.WAITING
-                await self._broadcast_people()
-                # Continue the conversational loop without manufacturing an
-                # initial emotional category.
-                return
+
+                retries = 0
+                while not self._stop_event.is_set():
+                    text = await self._listen()
+                    if self._stop_event.is_set() or self._active_person_for_interaction is None:
+                        await self._close_interaction_for_lost_person(db, session)
+                        return
+                    if not text:
+                        retries += 1
+                        if retries >= 3:
+                            await self._close_interaction_for_lost_person(db, session)
+                            return
+                        continue
+                    retries = 0
+                    await self._save_interaction(db, "usuario", text)
+                    if is_risk_disclosure(text):
+                        await crear_notificacion(
+                            db,
+                            tipo="alerta",
+                            mensaje="Posible situación de riesgo: se requiere acompañamiento inmediato de un adulto.",
+                            sesion_id=session.id,
+                        )
+                        await self._save_interaction(db, "robot", RISK_MESSAGE)
+                        await self._speak(RISK_MESSAGE, db)
+                        session.fin = datetime.now(timezone.utc)
+                        await db.commit()
+                        self.current_session_id = None
+                        self.current_child_name = None
+                        self.current_face_signal = None
+                        self.current_voice_signal = None
+                        self._active_person_for_interaction = None
+                        self._name_prompt_pending = False
+                        self.state = RobotState.WAITING
+                        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+                        await self._broadcast_people()
+                        return
+                    if any(word in text.lower() for word in ("chau", "adiós", "adios")):
+                        goodbye = "Fue lindo hablar contigo. Nos vemos pronto."
+                        await self._save_interaction(db, "robot", goodbye)
+                        await self._speak(goodbye, db)
+                        session.fin = datetime.now(timezone.utc)
+                        await db.commit()
+                        self.current_session_id = None
+                        self.current_child_name = None
+                        self.current_face_signal = None
+                        self.current_voice_signal = None
+                        self._active_person_for_interaction = None
+                        self._name_prompt_pending = False
+                        self.state = RobotState.WAITING
+                        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+                        await self._broadcast_people()
+                        return
+                    follow_up = self._analyze_emotion(text)
+                    if follow_up["emotion"] == "UNKNOWN":
+                        await self._save_interaction(
+                            db, "robot", "Te escucho. ¿Qué te gustaría compartir conmigo?"
+                        )
+                        await self._speak(
+                            "Te escucho. ¿Qué te gustaría compartir conmigo?", db
+                        )
+                        continue
+                    emotional_result = follow_up
+                    break
+                else:
+                    await self._close_interaction_for_lost_person(db, session)
+                    return
+
             self.current_emotion = initial_result["emotion"]
             await ws_manager.broadcast(
                 "robot_emotion",
