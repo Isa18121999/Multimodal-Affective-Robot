@@ -50,10 +50,11 @@ class ChuwiEmotionalManager:
         signals = {}
         if message.strip():
             text_emotion = self.adapter.detect_emotion(message)
+            normalized_text_emotion = self.normalize_emotion(text_emotion)
             signals["text"] = {
-                "emotion": self.normalize_emotion(text_emotion),
-                "confidence": 0.6,
-                "available": True,
+                "emotion": normalized_text_emotion,
+                "confidence": 0.6 if normalized_text_emotion != "UNKNOWN" else 0.0,
+                "available": normalized_text_emotion != "UNKNOWN",
             }
 
         for modality, signal in (modalities or {}).items():
