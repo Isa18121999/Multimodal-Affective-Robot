@@ -187,6 +187,9 @@ class RobotController:
                 if self._active_person_for_interaction in visible_ids
                 else None
             )
+        elif self.state == RobotState.INTERACTING and self._stop_event.is_set():
+            # A selected face was lost; leave selection empty until session cleanup.
+            self.active_person_id = None
         elif self.active_person_id not in visible_ids:
             self.active_person_id = (
                 max(visible_tracks, key=lambda track: track.bbox[2] * track.bbox[3]).person_id
