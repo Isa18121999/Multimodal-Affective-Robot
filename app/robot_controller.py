@@ -154,7 +154,8 @@ class RobotController:
             self.active_person_id = None
             self.person_tracker.clear()
             if self._active_person_for_interaction:
-                self._active_person_for_interaction = None
+                # Preserve the selected ID as a lost-track marker until the
+                # interaction coroutine closes its session.
                 self._name_prompt_pending = False
                 self.current_child_name = None
                 self.current_face_signal = None
