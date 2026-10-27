@@ -103,7 +103,6 @@ class RobotController:
         self.current_people = []
         self.active_person_id = None
         self._active_person_for_interaction = None
-        self._person_event_loop = None
         self.current_session_id = None
         self.current_child_name = None
         self.current_emotion = None
@@ -113,7 +112,6 @@ class RobotController:
         self.listening = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
         # Clear stale face/name state in any connected dashboard before dropping the loop.
-        self._person_event_loop = asyncio.get_running_loop()
         await self._broadcast_people()
         self._person_event_loop = None
 
@@ -146,6 +144,14 @@ class RobotController:
         visible_tracks = self.person_tracker.update(frame)
         self.current_people = self.person_tracker.snapshot()
         visible_ids = {track.person_id for track in visible_tracks}
+        if self._active_person_for_interaction and self._active_person_for_interaction not in visible_ids:
+            # The selected face vanished. End this interaction's identity binding:
+            # a different face must not inherit the current child's name/emotion.
+            self._active_person_for_interaction = None
+            self._name_prompt_pending = False
+            self.current_child_name = None
+            self.current_face_signal = None
+            self.current_voice_signal = None
 
         # Keep the selected ID only while it is visible. Do not silently switch
         # an ongoing interaction to another person's face.
@@ -484,6 +490,14 @@ class RobotController:
                 except FileNotFoundError:
                     pass
 
+            # A face signal is valid only while the locked person remained
+            # visible during the name exchange. Never infer a face signal for a
+            # different participant if the selected track expired.
+            if self._active_person_for_interaction is None:
+                self.current_face_signal = {
+                    "emotion": "UNKNOWN", "confidence": 0.0, "source": "face", "available": False
+                }
+                self.current_voice_signal = None
             initial_result = self._analyze_emotion(name_reply or "")
             self.current_emotion = initial_result["emotion"]
             await ws_manager.broadcast(
