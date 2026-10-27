@@ -120,8 +120,14 @@ class RobotController:
         return self.distance_cm
 
     def _init_camera(self):
-        if self.cap is None or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(0)
+        if self.cap is not None and self.cap.isOpened():
+            return
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+        self.cap = cv2.VideoCapture(0)
 
     def _detect_face(self) -> bool:
         """Capture one frame and update all temporary person tracks from that frame."""
@@ -424,6 +430,9 @@ class RobotController:
         self.current_emotion = None
         self.current_face_signal = None
         self.current_voice_signal = None
+        if self._active_person_for_interaction is None:
+            # Do not start a name association if detection did not select a visible face.
+            self._name_prompt_pending = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
 
         async with async_session() as db:
