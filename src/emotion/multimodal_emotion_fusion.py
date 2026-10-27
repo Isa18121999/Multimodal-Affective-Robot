@@ -5,8 +5,9 @@ class MultimodalEmotionFusion:
     """Fusiona señales emocionales de texto, voz y rostro.
 
     Cada modalidad puede entregar una etiqueta y una confianza entre 0 y 1.
-    La fusión ponderada permite incorporar modelos reales posteriormente sin
-    cambiar la interfaz del motor emocional.
+    Una modalidad con ``available=False`` no participa en la fusión. Cuando
+    ninguna señal válida está disponible, el resultado es ``UNKNOWN`` en lugar
+    de inventar una emoción por defecto.
     """
 
     DEFAULT_WEIGHTS = {
@@ -28,27 +29,44 @@ class MultimodalEmotionFusion:
     def fuse(self, signals):
         """Devuelve la emoción con mayor puntuación ponderada.
 
-        signals debe tener la forma:
+        ``signals`` puede tener la forma:
         {
-            "text": {"emotion": "SAD", "confidence": 0.9},
-            "voice": {"emotion": "SAD", "confidence": 0.7},
-            "face": {"emotion": "CALM", "confidence": 0.6},
+            "text": {"emotion": "SAD", "confidence": 0.9, "available": True},
+            "voice": {"emotion": "SAD", "confidence": 0.7, "available": False},
+            "face": {"emotion": "CALM", "confidence": 0.6, "available": True},
         }
-        Las modalidades ausentes simplemente no participan.
+
+        ``available=False`` significa que la modalidad no produjo una señal
+        utilizable y, por tanto, no debe aportar puntuación.
         """
         scores = Counter()
+        active_weight = 0.0
 
         for modality, signal in signals.items():
             if modality not in self.weights or not signal:
                 continue
+            if signal.get("available", True) is False:
+                continue
 
-            emotion = str(signal.get("emotion", "CALM")).upper()
-            confidence = float(signal.get("confidence", 0.0))
+            emotion = str(signal.get("emotion", "")).strip().upper()
+            if not emotion or emotion == "UNKNOWN":
+                continue
+
+            try:
+                confidence = float(signal.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                continue
+
             confidence = max(0.0, min(1.0, confidence))
-            scores[emotion] += self.weights[modality] * confidence
+            if confidence <= 0.0:
+                continue
 
-        if not scores:
-            return {"emotion": "CALM", "confidence": 0.0, "scores": {}}
+            weight = float(self.weights[modality])
+            scores[emotion] += weight * confidence
+            active_weight += weight
+
+        if not scores or active_weight <= 0.0:
+            return {"emotion": "UNKNOWN", "confidence": 0.0, "scores": {}}
 
         emotion, score = scores.most_common(1)[0]
         total = sum(scores.values())

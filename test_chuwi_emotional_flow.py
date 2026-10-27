@@ -64,6 +64,22 @@ def run_tests():
     assert conflict["scores"]["HAPPY"] > conflict["scores"]["FEAR"]
     print("OK - Fusión ponderada ante señales en conflicto")
 
+    unavailable_voice = fusion.fuse({
+        "text": {"emotion": "HAPPY", "confidence": 0.6, "available": True},
+        "voice": {"emotion": "FEAR", "confidence": 1.0, "available": False},
+    })
+    assert unavailable_voice["emotion"] == "HAPPY"
+    assert "FEAR" not in unavailable_voice["scores"]
+    print("OK - Modalidad no disponible no aporta puntuación")
+
+    unknown_only = fusion.fuse({
+        "voice": {"emotion": "FEAR", "confidence": 0.9, "available": False},
+    })
+    assert unknown_only["emotion"] == "UNKNOWN"
+    assert unknown_only["confidence"] == 0.0
+    assert unknown_only["scores"] == {}
+    print("OK - Sin señales válidas el resultado es UNKNOWN")
+
     voice = VoiceEmotionAnalyzer()
     voice_signal = voice.analyze(None)
     assert voice_signal["source"] == "voice"

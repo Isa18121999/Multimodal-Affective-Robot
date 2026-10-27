@@ -22,10 +22,13 @@ settings = Settings()
 
 
 def validate_deployment_settings() -> None:
-    """Fail early rather than exposing known credentials in production."""
-    if settings.ENVIRONMENT.lower() != "production":
-        return
+    """Fail early rather than falling back to known credentials."""
     if settings.SECRET_KEY in {"", "cambiar-en-produccion", "cambiar-en-produccion-abc123"}:
-        raise RuntimeError("SECRET_KEY debe configurarse con un valor seguro en producción")
+        if settings.ENVIRONMENT.lower() == "production":
+            raise RuntimeError("SECRET_KEY debe configurarse con un valor seguro en producción")
+
     if not settings.INITIAL_ADMIN_PASSWORD:
-        raise RuntimeError("INITIAL_ADMIN_PASSWORD es obligatorio en producción")
+        raise RuntimeError(
+            "INITIAL_ADMIN_PASSWORD es obligatorio. "
+            "No se permite crear el usuario admin con una contraseña predeterminada."
+        )
