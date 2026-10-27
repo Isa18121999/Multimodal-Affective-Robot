@@ -87,10 +87,10 @@ class RobotController:
         self.current_child_name = None
         self._person_event_loop = asyncio.get_running_loop()
         self._stop_event.clear()
-        self._task = asyncio.create_task(self._run_loop())
-        # Yield once so the controller loop can publish its WAITING state.
-        await asyncio.sleep(0)
+        self.state = RobotState.WAITING
+        await ws_manager.broadcast("robot_state", {"state": self.state.value})
         await self._broadcast_people()
+        self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self):
         self._stop_event.set()
