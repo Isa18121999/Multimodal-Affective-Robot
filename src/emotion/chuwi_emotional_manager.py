@@ -38,21 +38,23 @@ class ChuwiEmotionalManager:
 
     @classmethod
     def normalize_emotion(cls, emotion):
-        """Normaliza etiquetas externas a los estados internos de Chuwi."""
-        normalized = str(emotion or "CALM").strip().casefold()
+        """Normaliza etiquetas externas sin convertir señales ausentes en calma."""
+        normalized = str(emotion or "").strip().casefold()
+        if not normalized or normalized == "unknown":
+            return "UNKNOWN"
         return cls.EXTERNAL_EMOTION_MAP.get(normalized, normalized.upper())
 
     def analyze_interaction(self, message, modalities=None):
         """Analiza texto y fusiona señales opcionales de voz y rostro."""
         message = message or ""
-        text_emotion = self.adapter.detect_emotion(message)
-        text_confidence = 0.0 if not message.strip() else 0.6
-        signals = {
-            "text": {
+        signals = {}
+        if message.strip():
+            text_emotion = self.adapter.detect_emotion(message)
+            signals["text"] = {
                 "emotion": self.normalize_emotion(text_emotion),
-                "confidence": text_confidence,
+                "confidence": 0.6,
+                "available": True,
             }
-        }
 
         for modality, signal in (modalities or {}).items():
             if not signal:
