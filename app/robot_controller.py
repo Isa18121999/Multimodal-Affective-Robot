@@ -421,6 +421,31 @@ class RobotController:
                 await asyncio.sleep(1)
         self.state = RobotState.STOPPED
 
+    async def _close_interaction_for_lost_person(self, db, session) -> None:
+        """Close the current session without attributing it to another face."""
+        await self._save_interaction(
+            db, "robot", "La persona seleccionada dejó de estar visible; interacción pausada."
+        )
+        if not self._stop_event.is_set():
+            await self._speak(
+                "Ya no te veo bien. Esperaré para continuar cuando estés frente a mí.",
+                db,
+            )
+        session.fin = datetime.now(timezone.utc)
+        await db.commit()
+        self.current_session_id = None
+        self.current_child_name = None
+        self.current_emotion = None
+        self.current_face_signal = None
+        self.current_voice_signal = None
+        self.listening = False
+        self._active_person_for_interaction = None
+        self._name_prompt_pending = False
+        self.state = RobotState.WAITING
+        self._stop_event.clear()
+        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        await self._broadcast_people()
+
     async def _interact(self):
         self.state = RobotState.INTERACTING
         # When reusing a temporary track, retain its name only while it is
@@ -490,6 +515,9 @@ class RobotController:
                     self.current_people = self.person_tracker.snapshot()
                     await self._broadcast_people()
                 self._name_prompt_pending = False
+            if self._stop_event.is_set():
+                await self._close_interaction_for_lost_person(db, session)
+                return
             if name_reply:
                 await self._save_interaction(db, "usuario", "[nombre compartido]")
 
@@ -534,29 +562,7 @@ class RobotController:
                     "emotion": "UNKNOWN", "confidence": 0.0, "source": "face", "available": False
                 }
                 self.current_voice_signal = None
-                # The active face disappeared or the robot was stopped mid-flow.
-                # Do not generate an emotion/support message for an unbound person.
-                await self._save_interaction(
-                    db, "robot", "La persona seleccionada dejó de estar visible; interacción pausada."
-                )
-                if not self._stop_event.is_set():
-                    await self._speak(
-                        "Ya no te veo bien. Esperaré para continuar cuando estés frente a mí.",
-                        db,
-                    )
-                session.fin = datetime.now(timezone.utc)
-                await db.commit()
-                self.current_session_id = None
-                self.current_child_name = None
-                self.current_emotion = None
-                self.current_face_signal = None
-                self.current_voice_signal = None
-                self.listening = False
-                self._active_person_for_interaction = None
-                self._name_prompt_pending = False
-                self.state = RobotState.WAITING
-                await ws_manager.broadcast("robot_state", {"state": self.state.value})
-                await self._broadcast_people()
+                await self._close_interaction_for_lost_person(db, session)
                 return
 
             initial_result = self._analyze_emotion(name_reply or "")
