@@ -1,10 +1,9 @@
-"""Privacy-preserving person tracking for the CHUWI runtime.
+"""Privacy-preserving, temporary multi-person face tracking.
 
-This module does not perform biometric identification or store face images/templates.
-It assigns temporary IDs to visible faces and can associate a spoken name with the
-current temporary ID for the active interaction/session only.
+This module assigns short-lived IDs based on face-box position over time. It is
+not biometric identification: after a track disappears, a returning person may
+receive a new ID. No images or face templates are persisted.
 """
-
 from __future__ import annotations
 
 import math
@@ -29,8 +28,6 @@ class PersonTrack:
 
 
 class PersonTracker:
-    """Lightweight multi-person tracker based on face boxes and temporal proximity."""
-
     def __init__(
         self,
         face_cascade_path: str,
@@ -50,48 +47,48 @@ class PersonTracker:
         return math.hypot(a[0] - b[0], a[1] - b[1])
 
     def _new_track(self, bbox: tuple[int, int, int, int], now: float) -> PersonTrack:
-        track = PersonTrack(
-            person_id=f"person_{self._next_number}",
-            bbox=bbox,
-            last_seen=now,
-        )
+        track = PersonTrack(f"person_{self._next_number}", bbox, now)
         self._next_number += 1
         self.tracks[track.person_id] = track
         return track
 
     def update(self, frame: np.ndarray) -> list[PersonTrack]:
-        """Detect visible faces and keep stable temporary IDs while they remain visible."""
+        """Detect faces, match boxes one-to-one, and expire stale temporary IDs."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self.cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.2,
-            minNeighbors=5,
-            minSize=(60, 60),
+            gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60)
         )
         detections = [tuple(map(int, face)) for face in faces]
         now = time.monotonic()
-        unmatched = set(self.tracks)
-        current: list[PersonTrack] = []
 
-        for bbox in detections:
-            x, y, w, h = bbox
-            center = (x + w / 2, y + h / 2)
-            best_id = None
-            best_distance = float("inf")
-            for person_id in unmatched:
-                distance = self._distance(center, self.tracks[person_id].center)
-                if distance < best_distance:
-                    best_distance = distance
-                    best_id = person_id
+        # Greedy global nearest-pair matching prevents one track being assigned
+        # to two detections in the same frame.
+        candidates = []
+        for person_id, track in self.tracks.items():
+            for index, bbox in enumerate(detections):
+                x, y, w, h = bbox
+                center = (x + w / 2, y + h / 2)
+                distance = self._distance(center, track.center)
+                if distance <= self.max_match_distance:
+                    candidates.append((distance, person_id, index))
+        candidates.sort(key=lambda item: item[0])
 
-            if best_id is not None and best_distance <= self.max_match_distance:
-                track = self.tracks[best_id]
-                unmatched.remove(best_id)
-                track.bbox = bbox
-                track.last_seen = now
-            else:
-                track = self._new_track(bbox, now)
-            current.append(track)
+        matched_tracks: set[str] = set()
+        matched_detections: set[int] = set()
+        assignments: dict[int, PersonTrack] = {}
+        for _, person_id, index in candidates:
+            if person_id in matched_tracks or index in matched_detections:
+                continue
+            track = self.tracks[person_id]
+            track.bbox = detections[index]
+            track.last_seen = now
+            matched_tracks.add(person_id)
+            matched_detections.add(index)
+            assignments[index] = track
+
+        for index, bbox in enumerate(detections):
+            if index not in assignments:
+                assignments[index] = self._new_track(bbox, now)
 
         stale = [
             person_id
@@ -101,15 +98,19 @@ class PersonTracker:
         for person_id in stale:
             del self.tracks[person_id]
 
-        return current
+        # Return only currently visible faces, in the detector's order.
+        return [assignments[i] for i in range(len(detections))]
 
     def associate_name(self, person_id: str, name: str) -> bool:
-        """Associate a name with the current temporary tracker ID only."""
         track = self.tracks.get(person_id)
-        if not track:
+        clean_name = " ".join(name.strip().split())
+        if not track or not clean_name or len(clean_name) > 30:
             return False
-        track.name = name.strip().capitalize()
+        track.name = clean_name[:1].upper() + clean_name[1:]
         return True
+
+    def clear(self) -> None:
+        self.tracks.clear()
 
     def clear_names(self) -> None:
         for track in self.tracks.values():
