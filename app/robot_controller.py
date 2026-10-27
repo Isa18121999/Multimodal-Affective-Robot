@@ -88,6 +88,8 @@ class RobotController:
         self._person_event_loop = asyncio.get_running_loop()
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop())
+        # Yield once so the controller loop can publish its WAITING state.
+        await asyncio.sleep(0)
         await self._broadcast_people()
 
     async def stop(self):
