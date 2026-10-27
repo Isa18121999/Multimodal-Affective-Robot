@@ -144,6 +144,14 @@ class RobotController:
             self.current_people = []
             self.active_person_id = None
             self.person_tracker.clear()
+            if self._active_person_for_interaction:
+                self._active_person_for_interaction = None
+                self._name_prompt_pending = False
+                self.current_child_name = None
+                self.current_face_signal = None
+                self.current_voice_signal = None
+                if self.state == RobotState.INTERACTING:
+                    self._stop_event.set()
             publish_people(self)
             return False
 
