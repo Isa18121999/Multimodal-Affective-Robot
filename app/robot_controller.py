@@ -421,8 +421,8 @@ class RobotController:
 
     async def _interact(self):
         self.state = RobotState.INTERACTING
-        # Lock the selected face before asking for a name. If no current face is
-        # available, do not attach a name to an unrelated future detection.
+        # When reusing a temporary track, retain its name only while it is
+        # visible in this current frame; otherwise ask anew after a fresh track.
         visible_ids = {person["person_id"] for person in self.current_people}
         self._active_person_for_interaction = (
             self.active_person_id if self.active_person_id in visible_ids else None
