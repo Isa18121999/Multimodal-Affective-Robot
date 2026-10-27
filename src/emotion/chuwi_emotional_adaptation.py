@@ -14,7 +14,9 @@ class ChuwiEmotionalAdaptation:
     """Algoritmo base de adaptación emocional para pacientes pediátricos."""
 
     def analyze_text(self, message):
-        text = (message or "").lower()
+        text = (message or "").lower().strip()
+        if not text:
+            return None
 
         if any(word in text for word in ["miedo", "asustado", "temor"]):
             return EmotionalState.FEAR
@@ -29,8 +31,9 @@ class ChuwiEmotionalAdaptation:
         return EmotionalState.CALM
 
     def detect_emotion(self, message):
-        """Devuelve el estado emocional en formato compatible con la base de datos."""
-        return self.analyze_text(message).name
+        """Devuelve un estado o UNKNOWN si el mensaje no aporta evidencia textual."""
+        state = self.analyze_text(message)
+        return state.name if state is not None else "UNKNOWN"
 
     def select_strategy(self, emotion):
         strategies = {
