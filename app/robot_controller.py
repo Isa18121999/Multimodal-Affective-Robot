@@ -713,8 +713,9 @@ class RobotController:
             retries = 0
             while not self._stop_event.is_set():
                 text = await self._listen()
-                if self._stop_event.is_set():
-                    break
+                if self._stop_event.is_set() or self._active_person_for_interaction is None:
+                    await self._close_interaction_for_lost_person(db, session)
+                    return
                 if not text:
                     retries += 1
                     if retries >= 3:
