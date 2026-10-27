@@ -5,7 +5,6 @@ biometric identity recognition, and no photographs or face templates are saved.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import cv2
