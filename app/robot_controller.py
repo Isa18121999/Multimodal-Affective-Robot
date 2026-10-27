@@ -468,9 +468,18 @@ class RobotController:
 
             name_reply = await self._listen() if not known_name else ""
             if self._name_prompt_pending and name_reply:
+                # Re-check the selected ID after microphone listening; the
+                # background camera loop may have expired the track meanwhile.
+                selected_id = self._active_person_for_interaction
+                still_visible = any(
+                    person["person_id"] == selected_id for person in self.current_people
+                )
                 candidate_name = self._extract_name(name_reply)
-                if candidate_name and self.person_tracker.associate_name(
-                    self._active_person_for_interaction or "", candidate_name
+                if (
+                    still_visible
+                    and candidate_name
+                    and selected_id
+                    and self.person_tracker.associate_name(selected_id, candidate_name)
                 ):
                     self.current_child_name = candidate_name
                     self.current_people = self.person_tracker.snapshot()
