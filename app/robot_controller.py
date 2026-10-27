@@ -473,8 +473,11 @@ class RobotController:
                 # Re-check the selected ID after microphone listening; the
                 # background camera loop may have expired the track meanwhile.
                 selected_id = self._active_person_for_interaction
-                still_visible = any(
-                    person["person_id"] == selected_id for person in self.current_people
+                still_visible = bool(
+                    selected_id
+                    and any(person["person_id"] == selected_id for person in self.current_people)
+                    and self.state == RobotState.INTERACTING
+                    and not self._stop_event.is_set()
                 )
                 candidate_name = self._extract_name(name_reply)
                 if (
