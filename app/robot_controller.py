@@ -407,7 +407,9 @@ class RobotController:
         while not self._stop_event.is_set():
             try:
                 has_face = await asyncio.to_thread(self._detect_face)
-                if has_face:
+                if has_face and self.state == RobotState.WAITING:
+                    # Reset cancellation left by a prior interrupted interaction.
+                    self._stop_event.clear()
                     await self._interact()
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
@@ -513,7 +515,7 @@ class RobotController:
             # A face signal is valid only while the locked person remained
             # visible during the name exchange. Never infer a face signal for a
             # different participant if the selected track expired.
-            if self._active_person_for_interaction is None:
+            if self._active_person_for_interaction is None or self._stop_event.is_set():
                 self.current_face_signal = {
                     "emotion": "UNKNOWN", "confidence": 0.0, "source": "face", "available": False
                 }
@@ -546,6 +548,8 @@ class RobotController:
             retries = 0
             while not self._stop_event.is_set():
                 text = await self._listen()
+                if self._stop_event.is_set():
+                    break
                 if not text:
                     retries += 1
                     if retries >= 3:
