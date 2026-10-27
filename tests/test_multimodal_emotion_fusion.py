@@ -30,3 +30,12 @@ def test_clamps_confidence_and_respects_modality_weights():
     })
     assert result["emotion"] == "HAPPY"
     assert result["scores"] == {"HAPPY": 0.4}
+
+
+def test_ignores_non_finite_confidence_values():
+    fusion = MultimodalEmotionFusion()
+    result = fusion.fuse({
+        "text": {"emotion": "SAD", "confidence": float("nan")},
+        "voice": {"emotion": "HAPPY", "confidence": float("inf")},
+    })
+    assert result == {"emotion": "UNKNOWN", "confidence": 0.0, "scores": {}}
