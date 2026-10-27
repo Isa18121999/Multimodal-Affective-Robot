@@ -27,8 +27,8 @@ class ChuwiEmotionalManager:
         "anxious": "ANXIOUS",
         "neutral": "CALM",
         "calm": "CALM",
-        "sorprendido": "CALM",
-        "surprised": "CALM",
+        "sorprendido": "SURPRISE",
+        "surprised": "SURPRISE",
     }
 
     def __init__(self, fusion=None):
@@ -38,34 +38,51 @@ class ChuwiEmotionalManager:
 
     @classmethod
     def normalize_emotion(cls, emotion):
-        """Normaliza etiquetas externas a los estados internos de Chuwi."""
-        normalized = str(emotion or "CALM").strip().casefold()
+        """Normaliza etiquetas externas sin convertir señales ausentes en calma."""
+        normalized = str(emotion or "").strip().casefold()
+        if not normalized or normalized == "unknown":
+            return "UNKNOWN"
         return cls.EXTERNAL_EMOTION_MAP.get(normalized, normalized.upper())
 
     def analyze_interaction(self, message, modalities=None):
         """Analiza texto y fusiona señales opcionales de voz y rostro."""
         message = message or ""
-        text_emotion = self.adapter.detect_emotion(message)
-        text_confidence = 0.0 if not message.strip() else 0.6
-        signals = {
-            "text": {
-                "emotion": self.normalize_emotion(text_emotion),
-                "confidence": text_confidence,
+        signals = {}
+        if message.strip():
+            text_emotion = self.adapter.detect_emotion(message)
+            normalized_text_emotion = self.normalize_emotion(text_emotion)
+            signals["text"] = {
+                "emotion": normalized_text_emotion,
+                "confidence": 0.6 if normalized_text_emotion != "UNKNOWN" else 0.0,
+                "available": normalized_text_emotion != "UNKNOWN",
             }
-        }
 
         for modality, signal in (modalities or {}).items():
             if not signal:
                 continue
+            normalized = self.normalize_emotion(signal.get("emotion"))
+            if normalized == "UNKNOWN":
+                signals[modality] = {
+                    **signal,
+                    "emotion": "UNKNOWN",
+                    "available": False,
+                    "confidence": 0.0,
+                }
+                continue
             signals[modality] = {
                 **signal,
-                "emotion": self.normalize_emotion(signal.get("emotion")),
+                "emotion": normalized,
             }
 
         fused = self.fusion.fuse(signals)
         emotion = fused["emotion"]
-        database_emotion = self.EMOTION_DB_MAP.get(emotion, emotion.lower())
-        strategy = self.database.get_strategy(database_emotion)
+        if emotion == "UNKNOWN":
+            strategy = "acompanamiento"
+        elif emotion == "SURPRISE":
+            strategy = "conversacion_general"
+        else:
+            database_emotion = self.EMOTION_DB_MAP.get(emotion, emotion.lower())
+            strategy = self.database.get_strategy(database_emotion)
 
         return {
             "emotion": emotion,

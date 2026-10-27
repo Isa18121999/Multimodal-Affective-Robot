@@ -27,6 +27,7 @@ from app.support_protocol import (
 from app.websocket_manager import ws_manager
 from src.emotion.chuwi_emotional_manager import ChuwiEmotionalManager
 from src.integration.voice_emotion_analyzer import VoiceEmotionAnalyzer
+from app.person_runtime import create_person_tracker, publish_people
 
 
 class RobotState(str, Enum):
@@ -57,6 +58,12 @@ class RobotController:
         self.listening = False
         self.emotional_manager = emotional_manager or ChuwiEmotionalManager()
         self.voice_emotion_analyzer = VoiceEmotionAnalyzer()
+        self.person_tracker = create_person_tracker()
+        self.current_people: list[dict] = []
+        self.active_person_id: str | None = None
+        self._active_person_for_interaction: str | None = None
+        self._person_event_loop: asyncio.AbstractEventLoop | None = None
+        self._name_prompt_pending = False
 
     def set_active_profile(self, profile: dict | None):
         self.active_profile = profile
@@ -73,7 +80,16 @@ class RobotController:
     async def start(self):
         if self.is_running:
             return
+        self.person_tracker.clear()
+        self.current_people = []
+        self.active_person_id = None
+        self._active_person_for_interaction = None
+        self.current_child_name = None
+        self._person_event_loop = asyncio.get_running_loop()
         self._stop_event.clear()
+        self.state = RobotState.WAITING
+        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        await self._broadcast_people()
         self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self):
@@ -85,6 +101,10 @@ class RobotController:
             self.cap.release()
             self.cap = None
         self.state = RobotState.STOPPED
+        self.person_tracker.clear()
+        self.current_people = []
+        self.active_person_id = None
+        self._active_person_for_interaction = None
         self.current_session_id = None
         self.current_child_name = None
         self.current_emotion = None
@@ -93,32 +113,114 @@ class RobotController:
         self.last_speech = None
         self.listening = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        # Clear stale face/name state in any connected dashboard before dropping the loop.
+        await self._broadcast_people()
+        self._person_event_loop = None
 
     def update_distance(self, distance_cm: float):
         self.distance_cm = distance_cm
         return self.distance_cm
 
     def _init_camera(self):
-        if self.cap is None or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(0)
+        if self.cap is not None and self.cap.isOpened():
+            return
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+        self.cap = cv2.VideoCapture(0)
 
     def _detect_face(self) -> bool:
+        """Capture one frame and update all temporary person tracks from that frame."""
         self._init_camera()
-        ret, frame = self.cap.read()
-        if not ret:
+        if self.cap is None or not self.cap.isOpened():
+            self.current_people = []
+            self.active_person_id = None
+            self.person_tracker.clear()
+            if self._active_person_for_interaction:
+                # Preserve the selected ID as a lost-track marker until the
+                # interaction coroutine closes its session.
+                self._name_prompt_pending = False
+                self.current_child_name = None
+                self.current_face_signal = None
+                self.current_voice_signal = None
+                if self.state == RobotState.INTERACTING:
+                    self._stop_event.set()
+            publish_people(self)
             return False
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            self.current_people = []
+            self.active_person_id = None
+            self.person_tracker.clear()
+            if self._active_person_for_interaction:
+                # Preserve the selected ID as a lost-track marker until the
+                # interaction coroutine closes its session.
+                self._name_prompt_pending = False
+                self.current_child_name = None
+                self.current_face_signal = None
+                self.current_voice_signal = None
+                if self.state == RobotState.INTERACTING:
+                    self._stop_event.set()
+            publish_people(self)
+            return False
+
+        visible_tracks = self.person_tracker.update(frame)
+        self.current_people = self.person_tracker.snapshot()
+        visible_ids = {track.person_id for track in visible_tracks}
+        if self._active_person_for_interaction and self._active_person_for_interaction not in visible_ids:
+            # Keep the old ID until _close_interaction_for_lost_person runs;
+            # this prevents the old session from being bound to a new track.
+            self._name_prompt_pending = False
+            self.active_person_id = None
+            self.current_child_name = None
+            self.current_face_signal = None
+            self.current_voice_signal = None
+            if self.state == RobotState.INTERACTING:
+                self._stop_event.set()
+
+        # Keep the selected ID only while visible. A disappeared face clears
+        # the selection; the next camera cycle can select a new visible track.
+        if self._active_person_for_interaction:
+            self.active_person_id = (
+                self._active_person_for_interaction
+                if self._active_person_for_interaction in visible_ids
+                else None
+            )
+        elif self.state == RobotState.INTERACTING and self._stop_event.is_set():
+            # A selected face was lost; leave selection empty until session cleanup.
+            self.active_person_id = None
+        elif self.active_person_id not in visible_ids:
+            self.active_person_id = (
+                max(visible_tracks, key=lambda track: track.bbox[2] * track.bbox[3]).person_id
+                if visible_tracks
+                else None
+            )
+
+        publish_people(self)
+        return bool(visible_tracks)
+
+    async def _broadcast_people(self) -> None:
+        await ws_manager.broadcast(
+            "robot_people",
+            {
+                "people": self.current_people,
+                "active_person_id": self.active_person_id,
+                "active_person_name": self.current_child_name,
+            },
         )
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
-        return len(faces) > 0
 
     def _take_photo(self, path: str):
+        """Save a temporary interaction image; caller removes it after inference."""
         self._init_camera()
+        if self.cap is None or not self.cap.isOpened():
+            raise RuntimeError("La cámara no está disponible")
         ret, frame = self.cap.read()
-        if ret:
-            cv2.imwrite(path, frame)
+        if not ret or frame is None:
+            raise RuntimeError("No se pudo capturar la imagen para inferencia")
+        cv2.imwrite(path, frame)
 
     async def _detect_emotion(self, image_path: str) -> dict:
         """Obtiene la señal facial y la normaliza al vocabulario de Chuwi."""
@@ -150,12 +252,25 @@ class RobotController:
                 data = response.json()
             raw_emotion = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             emotion = self.emotional_manager.normalize_emotion(raw_emotion)
-            if emotion not in {"HAPPY", "SAD", "FRUSTRATED", "FEAR", "ANXIOUS", "CALM"}:
-                emotion = "CALM"
-            return {"emotion": emotion, "confidence": 0.75, "source": "face"}
+            # Do not claim calibrated facial emotion recognition from a prompt-only
+            # generative response. Preserve the label for debugging only; it is
+            # explicitly unavailable to multimodal fusion until validated.
+            if emotion not in {"HAPPY", "SAD", "FRUSTRATED", "FEAR", "ANXIOUS", "CALM", "SURPRISE"}:
+                emotion = "UNKNOWN"
+            return {
+                "emotion": emotion,
+                "confidence": 0.0,
+                "source": "face",
+                "available": False,
+            }
         except Exception as exc:
             print(f"Emotion error: {exc}")
-            return {"emotion": "CALM", "confidence": 0.0, "source": "face"}
+            return {
+                "emotion": "UNKNOWN",
+                "confidence": 0.0,
+                "source": "face",
+                "available": False,
+            }
 
     def _build_modalities(self) -> dict:
         modalities = {}
@@ -324,12 +439,11 @@ class RobotController:
         )
 
     async def _run_loop(self):
-        self.state = RobotState.WAITING
-        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        # State was set and broadcast by start() before this task was created.
         while not self._stop_event.is_set():
             try:
                 has_face = await asyncio.to_thread(self._detect_face)
-                if has_face:
+                if has_face and self.state == RobotState.WAITING:
                     await self._interact()
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
@@ -338,13 +452,53 @@ class RobotController:
                 print(f"Robot loop error: {exc}")
                 await asyncio.sleep(1)
         self.state = RobotState.STOPPED
+        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        self._person_event_loop = None
 
-    async def _interact(self):
-        self.state = RobotState.INTERACTING
+    async def _close_interaction_for_lost_person(self, db, session) -> None:
+        """Close the current session without attributing it to another face."""
+        await self._save_interaction(
+            db, "robot", "La persona seleccionada dejó de estar visible; interacción pausada."
+        )
+        if not self._stop_event.is_set():
+            await self._speak(
+                "Ya no te veo bien. Esperaré para continuar cuando estés frente a mí.",
+                db,
+            )
+        session.fin = datetime.now(timezone.utc)
+        await db.commit()
+        self.current_session_id = None
         self.current_child_name = None
         self.current_emotion = None
         self.current_face_signal = None
         self.current_voice_signal = None
+        self.listening = False
+        self._active_person_for_interaction = None
+        self._name_prompt_pending = False
+        self.active_person_id = None
+        self._stop_event.clear()
+        self.state = RobotState.WAITING
+        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        await self._broadcast_people()
+
+    async def _interact(self):
+        self.state = RobotState.INTERACTING
+        # When reusing a temporary track, retain its name only while it is
+        # visible in this current frame; otherwise ask anew after a fresh track.
+        visible_ids = {person["person_id"] for person in self.current_people}
+        self._active_person_for_interaction = (
+            self.active_person_id if self.active_person_id in visible_ids else None
+        )
+        self._name_prompt_pending = self._active_person_for_interaction is not None
+        selected_track = self.person_tracker.tracks.get(self._active_person_for_interaction or "")
+        known_name = selected_track.name if selected_track else None
+        self.current_child_name = known_name
+        self.current_emotion = None
+        self.current_face_signal = None
+        self.current_voice_signal = None
+        if self._active_person_for_interaction is None:
+            # Do not start a name association if detection did not select a visible face.
+            self._name_prompt_pending = False
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
 
         async with async_session() as db:
@@ -366,11 +520,39 @@ class RobotController:
             )
 
             self.historial = []
-            await self._save_interaction(db, "robot", self.GREETING)
-            await self._speak(self.GREETING, db)
+            greeting = (
+                f"¡Hola, {known_name}! Qué alegría verte otra vez. ¿Cómo estás?"
+                if known_name
+                else self.GREETING
+            )
+            await self._save_interaction(db, "robot", greeting)
+            await self._speak(greeting, db)
 
-            name_reply = await self._listen()
-            self.current_child_name = self._extract_name(name_reply) if name_reply else None
+            name_reply = await self._listen() if not known_name else ""
+            if self._name_prompt_pending and name_reply:
+                # Re-check the selected ID after microphone listening; the
+                # background camera loop may have expired the track meanwhile.
+                selected_id = self._active_person_for_interaction
+                still_visible = bool(
+                    selected_id
+                    and any(person["person_id"] == selected_id for person in self.current_people)
+                    and self.state == RobotState.INTERACTING
+                    and not self._stop_event.is_set()
+                )
+                candidate_name = self._extract_name(name_reply)
+                if (
+                    still_visible
+                    and candidate_name
+                    and selected_id
+                    and self.person_tracker.associate_name(selected_id, candidate_name)
+                ):
+                    self.current_child_name = candidate_name
+                    self.current_people = self.person_tracker.snapshot()
+                    await self._broadcast_people()
+                self._name_prompt_pending = False
+            if self._stop_event.is_set():
+                await self._close_interaction_for_lost_person(db, session)
+                return
             if name_reply:
                 await self._save_interaction(db, "usuario", "[nombre compartido]")
 
@@ -385,22 +567,132 @@ class RobotController:
             descriptor, photo_path = tempfile.mkstemp(suffix=".jpg")
             os.close(descriptor)
             try:
+                if self._active_person_for_interaction is None:
+                    raise RuntimeError("La persona seleccionada ya no está visible")
                 await asyncio.to_thread(self._take_photo, photo_path)
                 self.current_face_signal = await self._detect_emotion(photo_path)
+                # Do not attach a facial signal to a different face if the
+                # selected track disappeared during the external inference call.
+                if self._active_person_for_interaction is None:
+                    self.current_face_signal = {
+                        "emotion": "UNKNOWN", "confidence": 0.0,
+                        "source": "face", "available": False
+                    }
+            except Exception as exc:
+                print(f"Photo capture error: {exc}")
+                self.current_face_signal = {
+                    "emotion": "UNKNOWN", "confidence": 0.0, "source": "face", "available": False
+                }
             finally:
                 try:
                     os.remove(photo_path)
                 except FileNotFoundError:
                     pass
 
-            initial_result = self._analyze_emotion(name_reply or "")
-            self.current_emotion = initial_result["emotion"]
+            # A face signal is valid only while the locked person remained
+            # visible during the name exchange. Never infer a face signal for a
+            # different participant if the selected track expired.
+            if self._active_person_for_interaction is None or self._stop_event.is_set():
+                self.current_face_signal = {
+                    "emotion": "UNKNOWN", "confidence": 0.0, "source": "face", "available": False
+                }
+                self.current_voice_signal = None
+                await self._close_interaction_for_lost_person(db, session)
+                return
+
+            emotional_result = self._analyze_emotion(name_reply or "")
+            if emotional_result["emotion"] == "UNKNOWN":
+                # Keep the interaction bound to the same person while asking an
+                # open-ended question; do not assume a default emotional state.
+                self.current_emotion = None
+                await ws_manager.broadcast(
+                    "robot_emotion",
+                    {
+                        "emotion": "UNKNOWN",
+                        "confidence": 0.0,
+                        "scores": {},
+                        "sesion_id": session.id,
+                    },
+                )
+                question = "Todavía no puedo interpretar cómo te sientes. ¿Quieres contarme cómo estás?"
+                await self._save_interaction(db, "robot", question)
+                await self._speak(question, db)
+                session.emocion_inicial = None
+                await db.commit()
+
+                retries = 0
+                while not self._stop_event.is_set():
+                    text = await self._listen()
+                    if self._stop_event.is_set() or self._active_person_for_interaction is None:
+                        await self._close_interaction_for_lost_person(db, session)
+                        return
+                    if not text:
+                        retries += 1
+                        if retries >= 3:
+                            await self._close_interaction_for_lost_person(db, session)
+                            return
+                        continue
+                    retries = 0
+                    await self._save_interaction(db, "usuario", text)
+                    if is_risk_disclosure(text):
+                        await crear_notificacion(
+                            db,
+                            tipo="alerta",
+                            mensaje="Posible situación de riesgo: se requiere acompañamiento inmediato de un adulto.",
+                            sesion_id=session.id,
+                        )
+                        await self._save_interaction(db, "robot", RISK_MESSAGE)
+                        await self._speak(RISK_MESSAGE, db)
+                        session.fin = datetime.now(timezone.utc)
+                        await db.commit()
+                        self.current_session_id = None
+                        self.current_child_name = None
+                        self.current_face_signal = None
+                        self.current_voice_signal = None
+                        self._active_person_for_interaction = None
+                        self._name_prompt_pending = False
+                        self.state = RobotState.WAITING
+                        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+                        await self._broadcast_people()
+                        return
+                    if any(word in text.lower() for word in ("chau", "adiós", "adios")):
+                        goodbye = "Fue lindo hablar contigo. Nos vemos pronto."
+                        await self._save_interaction(db, "robot", goodbye)
+                        await self._speak(goodbye, db)
+                        session.fin = datetime.now(timezone.utc)
+                        await db.commit()
+                        self.current_session_id = None
+                        self.current_child_name = None
+                        self.current_face_signal = None
+                        self.current_voice_signal = None
+                        self._active_person_for_interaction = None
+                        self._name_prompt_pending = False
+                        self.state = RobotState.WAITING
+                        await ws_manager.broadcast("robot_state", {"state": self.state.value})
+                        await self._broadcast_people()
+                        return
+                    follow_up = self._analyze_emotion(text)
+                    if follow_up["emotion"] == "UNKNOWN":
+                        await self._save_interaction(
+                            db, "robot", "Te escucho. ¿Qué te gustaría compartir conmigo?"
+                        )
+                        await self._speak(
+                            "Te escucho. ¿Qué te gustaría compartir conmigo?", db
+                        )
+                        continue
+                    emotional_result = follow_up
+                    break
+                else:
+                    await self._close_interaction_for_lost_person(db, session)
+                    return
+
+            self.current_emotion = emotional_result["emotion"]
             await ws_manager.broadcast(
                 "robot_emotion",
                 {
                     "emotion": self.current_emotion,
-                    "confidence": initial_result["confidence"],
-                    "scores": initial_result["scores"],
+                    "confidence": emotional_result["confidence"],
+                    "scores": emotional_result["scores"],
                     "sesion_id": session.id,
                 },
             )
@@ -421,6 +713,9 @@ class RobotController:
             retries = 0
             while not self._stop_event.is_set():
                 text = await self._listen()
+                if self._stop_event.is_set() or self._active_person_for_interaction is None:
+                    await self._close_interaction_for_lost_person(db, session)
+                    return
                 if not text:
                     retries += 1
                     if retries >= 3:
@@ -479,8 +774,11 @@ class RobotController:
         self.current_face_signal = None
         self.current_voice_signal = None
         self.listening = False
+        self._active_person_for_interaction = None
+        self._name_prompt_pending = False
         self.state = RobotState.WAITING
         await ws_manager.broadcast("robot_state", {"state": self.state.value})
+        await self._broadcast_people()
         await asyncio.sleep(5)
 
 
